@@ -84,27 +84,28 @@ export default function DashboardPage() {
   );
 
   const loadData = useCallback(async () => {
-    setLoading(true);
+    try {
+      setLoading(true);
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) return;
-    setCurrentUserId(user.id);
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) { setLoading(false); return; }
+      setCurrentUserId(user.id);
 
-    const { start, end } = getDateRange(periodType);
+      const { start, end } = getDateRange(periodType);
 
-    // Fetch profiles
-    const { data: profiles } = await supabase
-      .from('profiles')
-      .select('*');
+      // Fetch profiles
+      const { data: profiles } = await supabase
+        .from('profiles')
+        .select('*');
 
-    // Fetch call logs for the period
-    let callQuery = supabase
-      .from('call_logs')
-      .select('*, profiles(*)')
-      .gte('called_at', start.toISOString())
-      .lte('called_at', end.toISOString());
+      // Fetch call logs for the period
+      let callQuery = supabase
+        .from('call_logs')
+        .select('*')
+        .gte('called_at', start.toISOString())
+        .lte('called_at', end.toISOString());
 
     if (viewMode === 'personal') {
       callQuery = callQuery.eq('caller_id', user.id);
@@ -220,12 +221,17 @@ export default function DashboardPage() {
     // Fetch targets
     const { data: targetData } = await supabase
       .from('targets')
-      .select('*, profiles(*)')
+      .select('*')
       .eq('period_type', periodType === 'daily' ? 'daily' : periodType === 'weekly' ? 'weekly' : 'monthly');
 
     setTargets(targetData || []);
-    setLoading(false);
-  }, [periodType, viewMode, supabase, getDateRange]);
+    } catch (err) {
+      console.error('Dashboard load error:', err);
+    } finally {
+      setLoading(false);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [periodType, viewMode]);
 
   useEffect(() => {
     loadData();

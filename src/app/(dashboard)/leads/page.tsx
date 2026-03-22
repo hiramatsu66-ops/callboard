@@ -37,7 +37,7 @@ export default function LeadsPage() {
 
     let query = supabase
       .from('leads')
-      .select('*, profiles(*)', { count: 'exact' });
+      .select('*', { count: 'exact' });
 
     if (search) {
       query = query.or(

@@ -39,7 +39,7 @@ export default function LeadDetailPage({
   const loadLead = useCallback(async () => {
     const { data } = await supabase
       .from('leads')
-      .select('*, profiles(*)')
+      .select('*')
       .eq('id', id)
       .single();
 
@@ -59,7 +59,7 @@ export default function LeadDetailPage({
   const loadCallLogs = useCallback(async () => {
     const { data } = await supabase
       .from('call_logs')
-      .select('*, profiles(*)')
+      .select('*')
       .eq('lead_id', id)
       .order('called_at', { ascending: false });
 
