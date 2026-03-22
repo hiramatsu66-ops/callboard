@@ -40,6 +40,7 @@ create table public.leads (
   phone text not null,
   contact_name text default '',
   homepage text default '',
+  next_activity_date date,
   status text not null default 'new' check (status in ('new','calling','contacted','appointment','excluded','dnc')),
   memo text default '',
   assigned_to uuid references public.profiles(id),

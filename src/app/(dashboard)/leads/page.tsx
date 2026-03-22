@@ -1,16 +1,19 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase';
 import type {
   Lead,
   LeadStatus,
+  CallResult,
+  CallLog,
   Profile,
 } from '@/lib/types';
 import {
   LEAD_STATUS_LABELS,
   LEAD_STATUS_COLORS,
+  CALL_RESULT_LABELS,
+  CALL_RESULT_COLORS,
 } from '@/lib/types';
 import Papa from 'papaparse';
 
@@ -32,7 +35,13 @@ export default function LeadsPage() {
   const [addForm, setAddForm] = useState({ company_name: '', phone: '', contact_name: '', homepage: '', memo: '' });
   const [adding, setAdding] = useState(false);
 
-  const router = useRouter();
+  // Sidebar state
+  const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
+  const [sidebarCallLogs, setSidebarCallLogs] = useState<CallLog[]>([]);
+  const [activityMemo, setActivityMemo] = useState('');
+  const [nextActivityDate, setNextActivityDate] = useState('');
+  const [sidebarLoading, setSidebarLoading] = useState(false);
+
   const supabase = createClient();
 
   const loadLeads = useCallback(async () => {
@@ -87,6 +96,85 @@ export default function LeadsPage() {
   useEffect(() => {
     loadLeads();
   }, [loadLeads]);
+
+  // Sidebar: load call logs for selected lead
+  const loadSidebarData = useCallback(async (lead: Lead) => {
+    setSidebarLoading(true);
+    const { data } = await supabase
+      .from('call_logs')
+      .select('*')
+      .eq('lead_id', lead.id)
+      .order('called_at', { ascending: false });
+    setSidebarCallLogs(data || []);
+    setNextActivityDate(lead.next_activity_date || '');
+    setActivityMemo('');
+    setSidebarLoading(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleSelectLead = (lead: Lead) => {
+    if (selectedLead?.id === lead.id) {
+      setSelectedLead(null);
+      return;
+    }
+    setSelectedLead(lead);
+    loadSidebarData(lead);
+  };
+
+  const handleRecordActivity = async (result: CallResult) => {
+    if (!selectedLead) return;
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    // Insert call log with current timestamp
+    await supabase.from('call_logs').insert({
+      lead_id: selectedLead.id,
+      caller_id: user.id,
+      result,
+      memo: activityMemo,
+    });
+
+    // Update lead status based on result
+    let newStatus: LeadStatus = selectedLead.status;
+    if (result === 'appointment') newStatus = 'appointment';
+    else if (result === 'connected') newStatus = 'contacted';
+    else if (result === 'invalid') newStatus = 'excluded';
+    else if (result === 'rejected') newStatus = 'dnc';
+    else if (newStatus === 'new') newStatus = 'calling';
+
+    // Update lead with new status and next_activity_date
+    await supabase
+      .from('leads')
+      .update({
+        status: newStatus,
+        next_activity_date: nextActivityDate || null,
+      })
+      .eq('id', selectedLead.id);
+
+    // Refresh
+    setActivityMemo('');
+    const { data: updatedLead } = await supabase
+      .from('leads')
+      .select('*')
+      .eq('id', selectedLead.id)
+      .single();
+    if (updatedLead) {
+      setSelectedLead(updatedLead);
+      setNextActivityDate(updatedLead.next_activity_date || '');
+    }
+    loadSidebarData(updatedLead || selectedLead);
+    loadLeads();
+  };
+
+  const handleUpdateNextActivityDate = async (date: string) => {
+    if (!selectedLead) return;
+    setNextActivityDate(date);
+    await supabase
+      .from('leads')
+      .update({ next_activity_date: date || null })
+      .eq('id', selectedLead.id);
+    loadLeads();
+  };
 
   const handleCSVUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -150,187 +238,332 @@ export default function LeadsPage() {
   const totalPages = Math.ceil(totalCount / PAGE_SIZE);
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-800">架電リスト</h1>
-        <div className="flex gap-2">
-          <button
-            onClick={() => setShowAddModal(true)}
-            className="px-4 py-2 bg-slate-800 text-white text-sm font-medium rounded-lg hover:bg-slate-700 transition-colors"
-          >
-            新規追加
-          </button>
-          <button
-            onClick={() => setShowImportModal(true)}
-            className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors"
-          >
-            CSVインポート
-          </button>
+    <div className="flex h-full">
+      {/* Main content */}
+      <div className={`flex-1 space-y-6 transition-all ${selectedLead ? 'mr-0' : ''}`}>
+        <div className="flex items-center justify-between">
+          <h1 className="text-2xl font-bold text-gray-800">架電リスト</h1>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setShowAddModal(true)}
+              className="px-4 py-2 bg-slate-800 text-white text-sm font-medium rounded-lg hover:bg-slate-700 transition-colors"
+            >
+              新規追加
+            </button>
+            <button
+              onClick={() => setShowImportModal(true)}
+              className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors"
+            >
+              CSVインポート
+            </button>
+          </div>
         </div>
-      </div>
 
-      {/* Filters */}
-      <div className="flex items-center gap-4">
-        <div className="flex-1">
-          <input
-            type="text"
-            placeholder="会社名・担当者名・電話番号で検索..."
-            value={search}
+        {/* Filters */}
+        <div className="flex items-center gap-4">
+          <div className="flex-1">
+            <input
+              type="text"
+              placeholder="会社名・担当者名・電話番号で検索..."
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setPage(0);
+              }}
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-500 focus:border-transparent"
+            />
+          </div>
+          <select
+            value={statusFilter}
             onChange={(e) => {
-              setSearch(e.target.value);
+              setStatusFilter(e.target.value as LeadStatus | 'all');
               setPage(0);
             }}
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-500 focus:border-transparent"
-          />
+            className="px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-500 bg-white"
+          >
+            <option value="all">全てのステータス</option>
+            {Object.entries(LEAD_STATUS_LABELS).map(([key, label]) => (
+              <option key={key} value={key}>
+                {label}
+              </option>
+            ))}
+          </select>
+          <select
+            value={assignedFilter}
+            onChange={(e) => {
+              setAssignedFilter(e.target.value);
+              setPage(0);
+            }}
+            className="px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-500 bg-white"
+          >
+            <option value="all">全ての担当者</option>
+            <option value="unassigned">未割当</option>
+            {profiles.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
         </div>
-        <select
-          value={statusFilter}
-          onChange={(e) => {
-            setStatusFilter(e.target.value as LeadStatus | 'all');
-            setPage(0);
-          }}
-          className="px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-500 bg-white"
-        >
-          <option value="all">全てのステータス</option>
-          {Object.entries(LEAD_STATUS_LABELS).map(([key, label]) => (
-            <option key={key} value={key}>
-              {label}
-            </option>
-          ))}
-        </select>
-        <select
-          value={assignedFilter}
-          onChange={(e) => {
-            setAssignedFilter(e.target.value);
-            setPage(0);
-          }}
-          className="px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-500 bg-white"
-        >
-          <option value="all">全ての担当者</option>
-          <option value="unassigned">未割当</option>
-          {profiles.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
+
+        {/* Table */}
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+          {loading ? (
+            <div className="flex items-center justify-center h-64">
+              <p className="text-gray-500">読み込み中...</p>
+            </div>
+          ) : leads.length === 0 ? (
+            <div className="flex items-center justify-center h-64">
+              <p className="text-gray-500">リードが見つかりません</p>
+            </div>
+          ) : (
+            <>
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr className="bg-gray-50 border-b border-gray-200">
+                      <th className="text-left py-3 px-4 text-sm font-medium text-gray-500">
+                        会社名
+                      </th>
+                      <th className="text-left py-3 px-4 text-sm font-medium text-gray-500">
+                        担当者名
+                      </th>
+                      <th className="text-left py-3 px-4 text-sm font-medium text-gray-500">
+                        電話番号
+                      </th>
+                      <th className="text-left py-3 px-4 text-sm font-medium text-gray-500">
+                        HP
+                      </th>
+                      <th className="text-left py-3 px-4 text-sm font-medium text-gray-500">
+                        ステータス
+                      </th>
+                      <th className="text-left py-3 px-4 text-sm font-medium text-gray-500">
+                        次回予定
+                      </th>
+                      <th className="text-left py-3 px-4 text-sm font-medium text-gray-500">
+                        担当
+                      </th>
+                      <th className="text-left py-3 px-4 text-sm font-medium text-gray-500">
+                        更新日
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {leads.map((lead) => (
+                      <tr
+                        key={lead.id}
+                        onClick={() => handleSelectLead(lead)}
+                        className={`border-b border-gray-100 hover:bg-gray-50 cursor-pointer transition-colors ${
+                          selectedLead?.id === lead.id ? 'bg-blue-50 hover:bg-blue-50' : ''
+                        }`}
+                      >
+                        <td className="py-3 px-4 text-sm font-medium text-gray-800">
+                          {lead.company_name}
+                        </td>
+                        <td className="py-3 px-4 text-sm text-gray-600">
+                          {lead.contact_name || '-'}
+                        </td>
+                        <td className="py-3 px-4 text-sm text-gray-600">
+                          {lead.phone}
+                        </td>
+                        <td className="py-3 px-4 text-sm text-gray-600">
+                          {lead.homepage ? (
+                            <a
+                              href={lead.homepage.startsWith('http') ? lead.homepage : `https://${lead.homepage}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              className="text-blue-600 hover:underline"
+                            >
+                              {lead.homepage.replace(/^https?:\/\//, '').replace(/\/$/, '')}
+                            </a>
+                          ) : '-'}
+                        </td>
+                        <td className="py-3 px-4">
+                          <span
+                            className={`inline-block px-2 py-1 rounded-full text-xs font-medium ${LEAD_STATUS_COLORS[lead.status]}`}
+                          >
+                            {LEAD_STATUS_LABELS[lead.status]}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4 text-sm text-gray-600">
+                          {lead.next_activity_date ? (
+                            <span className={
+                              new Date(lead.next_activity_date) < new Date(new Date().toDateString())
+                                ? 'text-red-600 font-medium'
+                                : new Date(lead.next_activity_date).toDateString() === new Date().toDateString()
+                                ? 'text-amber-600 font-medium'
+                                : ''
+                            }>
+                              {new Date(lead.next_activity_date).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' })}
+                            </span>
+                          ) : '-'}
+                        </td>
+                        <td className="py-3 px-4 text-sm text-gray-600">
+                          {profiles.find(p => p.id === lead.assigned_to)?.name || '未割当'}
+                        </td>
+                        <td className="py-3 px-4 text-sm text-gray-400">
+                          {new Date(lead.updated_at).toLocaleDateString('ja-JP')}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Pagination */}
+              {totalPages > 1 && (
+                <div className="flex items-center justify-between px-4 py-3 bg-gray-50 border-t border-gray-200">
+                  <p className="text-sm text-gray-500">
+                    全{totalCount}件中 {page * PAGE_SIZE + 1}-
+                    {Math.min((page + 1) * PAGE_SIZE, totalCount)}件
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setPage(Math.max(0, page - 1))}
+                      disabled={page === 0}
+                      className="px-3 py-1 text-sm border border-gray-300 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100"
+                    >
+                      前へ
+                    </button>
+                    <button
+                      onClick={() =>
+                        setPage(Math.min(totalPages - 1, page + 1))
+                      }
+                      disabled={page >= totalPages - 1}
+                      className="px-3 py-1 text-sm border border-gray-300 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100"
+                    >
+                      次へ
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
       </div>
 
-      {/* Table */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-        {loading ? (
-          <div className="flex items-center justify-center h-64">
-            <p className="text-gray-500">読み込み中...</p>
+      {/* Activity Sidebar */}
+      {selectedLead && (
+        <div className="w-96 flex-shrink-0 border-l border-gray-200 bg-white ml-6 rounded-lg shadow-sm overflow-hidden flex flex-col" style={{ maxHeight: 'calc(100vh - 7rem)' }}>
+          {/* Sidebar Header */}
+          <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between bg-gray-50">
+            <div className="min-w-0">
+              <h2 className="text-sm font-semibold text-gray-800 truncate">{selectedLead.company_name}</h2>
+              <p className="text-xs text-gray-500">{selectedLead.phone}</p>
+            </div>
+            <button
+              onClick={() => setSelectedLead(null)}
+              className="text-gray-400 hover:text-gray-600 flex-shrink-0 ml-2"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
           </div>
-        ) : leads.length === 0 ? (
-          <div className="flex items-center justify-center h-64">
-            <p className="text-gray-500">リードが見つかりません</p>
-          </div>
-        ) : (
-          <>
-            <table className="w-full">
-              <thead>
-                <tr className="bg-gray-50 border-b border-gray-200">
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-500">
-                    会社名
-                  </th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-500">
-                    担当者名
-                  </th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-500">
-                    電話番号
-                  </th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-500">
-                    HP
-                  </th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-500">
-                    ステータス
-                  </th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-500">
-                    担当
-                  </th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-500">
-                    更新日
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {leads.map((lead) => (
-                  <tr
-                    key={lead.id}
-                    onClick={() => router.push(`/leads/${lead.id}`)}
-                    className="border-b border-gray-100 hover:bg-gray-50 cursor-pointer transition-colors"
-                  >
-                    <td className="py-3 px-4 text-sm font-medium text-gray-800">
-                      {lead.company_name}
-                    </td>
-                    <td className="py-3 px-4 text-sm text-gray-600">
-                      {lead.contact_name || '-'}
-                    </td>
-                    <td className="py-3 px-4 text-sm text-gray-600">
-                      {lead.phone}
-                    </td>
-                    <td className="py-3 px-4 text-sm text-gray-600">
-                      {lead.homepage ? (
-                        <a
-                          href={lead.homepage.startsWith('http') ? lead.homepage : `https://${lead.homepage}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          onClick={(e) => e.stopPropagation()}
-                          className="text-blue-600 hover:underline"
-                        >
-                          {lead.homepage.replace(/^https?:\/\//, '').replace(/\/$/, '')}
-                        </a>
-                      ) : '-'}
-                    </td>
-                    <td className="py-3 px-4">
-                      <span
-                        className={`inline-block px-2 py-1 rounded-full text-xs font-medium ${LEAD_STATUS_COLORS[lead.status]}`}
-                      >
-                        {LEAD_STATUS_LABELS[lead.status]}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4 text-sm text-gray-600">
-                      {profiles.find(p => p.id === lead.assigned_to)?.name || '未割当'}
-                    </td>
-                    <td className="py-3 px-4 text-sm text-gray-400">
-                      {new Date(lead.updated_at).toLocaleDateString('ja-JP')}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
 
-            {/* Pagination */}
-            {totalPages > 1 && (
-              <div className="flex items-center justify-between px-4 py-3 bg-gray-50 border-t border-gray-200">
-                <p className="text-sm text-gray-500">
-                  全{totalCount}件中 {page * PAGE_SIZE + 1}-
-                  {Math.min((page + 1) * PAGE_SIZE, totalCount)}件
-                </p>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setPage(Math.max(0, page - 1))}
-                    disabled={page === 0}
-                    className="px-3 py-1 text-sm border border-gray-300 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100"
+          {sidebarLoading ? (
+            <div className="flex-1 flex items-center justify-center">
+              <p className="text-sm text-gray-500">読み込み中...</p>
+            </div>
+          ) : (
+            <div className="flex-1 overflow-y-auto">
+              {/* Lead Info */}
+              <div className="px-4 py-3 border-b border-gray-100 space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${LEAD_STATUS_COLORS[selectedLead.status]}`}>
+                    {LEAD_STATUS_LABELS[selectedLead.status]}
+                  </span>
+                  <span className="text-xs text-gray-400">
+                    担当: {profiles.find(p => p.id === selectedLead.assigned_to)?.name || '未割当'}
+                  </span>
+                </div>
+                {selectedLead.contact_name && (
+                  <p className="text-xs text-gray-600">担当者: {selectedLead.contact_name}</p>
+                )}
+                {selectedLead.homepage && (
+                  <a
+                    href={selectedLead.homepage.startsWith('http') ? selectedLead.homepage : `https://${selectedLead.homepage}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-blue-600 hover:underline block"
                   >
-                    前へ
-                  </button>
-                  <button
-                    onClick={() =>
-                      setPage(Math.min(totalPages - 1, page + 1))
-                    }
-                    disabled={page >= totalPages - 1}
-                    className="px-3 py-1 text-sm border border-gray-300 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100"
-                  >
-                    次へ
-                  </button>
+                    {selectedLead.homepage.replace(/^https?:\/\//, '').replace(/\/$/, '')}
+                  </a>
+                )}
+                {selectedLead.memo && (
+                  <p className="text-xs text-gray-500">メモ: {selectedLead.memo}</p>
+                )}
+              </div>
+
+              {/* Next Activity Date */}
+              <div className="px-4 py-3 border-b border-gray-100">
+                <label className="block text-xs font-medium text-gray-500 mb-1">次回活動予定日</label>
+                <input
+                  type="date"
+                  value={nextActivityDate}
+                  onChange={(e) => handleUpdateNextActivityDate(e.target.value)}
+                  className="w-full px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-500"
+                />
+              </div>
+
+              {/* Record Activity */}
+              <div className="px-4 py-3 border-b border-gray-100">
+                <h3 className="text-xs font-semibold text-gray-700 mb-2">活動を記録</h3>
+                <textarea
+                  value={activityMemo}
+                  onChange={(e) => setActivityMemo(e.target.value)}
+                  placeholder="活動メモを入力..."
+                  rows={2}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-500 resize-none mb-2"
+                />
+                <div className="grid grid-cols-3 gap-1.5">
+                  {(Object.keys(CALL_RESULT_LABELS) as CallResult[]).map((result) => (
+                    <button
+                      key={result}
+                      onClick={() => handleRecordActivity(result)}
+                      className={`py-2 px-1 rounded-lg text-xs font-medium transition-colors ${CALL_RESULT_COLORS[result]}`}
+                    >
+                      {CALL_RESULT_LABELS[result]}
+                    </button>
+                  ))}
                 </div>
               </div>
-            )}
-          </>
-        )}
-      </div>
+
+              {/* Activity History */}
+              <div className="px-4 py-3">
+                <h3 className="text-xs font-semibold text-gray-700 mb-2">活動履歴</h3>
+                {sidebarCallLogs.length === 0 ? (
+                  <p className="text-xs text-gray-400 text-center py-4">まだ活動履歴がありません</p>
+                ) : (
+                  <div className="space-y-3">
+                    {sidebarCallLogs.map((log) => (
+                      <div key={log.id} className="border-l-2 border-gray-200 pl-3 py-0.5">
+                        <div className="flex items-center gap-2">
+                          <span className={`inline-block px-1.5 py-0.5 rounded-full text-[10px] font-medium ${CALL_RESULT_COLORS[log.result].replace(/hover:\S+/g, '')}`}>
+                            {CALL_RESULT_LABELS[log.result]}
+                          </span>
+                          <span className="text-[10px] text-gray-400">
+                            {new Date(log.called_at).toLocaleString('ja-JP', {
+                              month: 'numeric',
+                              day: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}
+                          </span>
+                        </div>
+                        {log.memo && (
+                          <p className="text-xs text-gray-600 mt-0.5">{log.memo}</p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Add Lead Modal */}
       {showAddModal && (

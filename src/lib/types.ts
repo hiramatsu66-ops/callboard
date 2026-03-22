@@ -13,6 +13,7 @@ export interface Lead {
   phone: string;
   contact_name: string;
   homepage: string;
+  next_activity_date: string | null;
   status: LeadStatus;
   memo: string;
   assigned_to: string | null;
