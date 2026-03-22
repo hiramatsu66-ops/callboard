@@ -42,6 +42,11 @@ export default function LeadsPage() {
   const [nextActivityDate, setNextActivityDate] = useState('');
   const [sidebarLoading, setSidebarLoading] = useState(false);
 
+  // Edit call log state
+  const [editingLogId, setEditingLogId] = useState<string | null>(null);
+  const [editLogResult, setEditLogResult] = useState<CallResult>('no_answer');
+  const [editLogMemo, setEditLogMemo] = useState('');
+
   const supabase = createClient();
 
   const loadLeads = useCallback(async () => {
@@ -174,6 +179,28 @@ export default function LeadsPage() {
       .update({ next_activity_date: date || null })
       .eq('id', selectedLead.id);
     loadLeads();
+  };
+
+  const handleStartEditLog = (log: CallLog) => {
+    setEditingLogId(log.id);
+    setEditLogResult(log.result);
+    setEditLogMemo(log.memo || '');
+  };
+
+  const handleSaveEditLog = async () => {
+    if (!editingLogId || !selectedLead) return;
+    await supabase
+      .from('call_logs')
+      .update({ result: editLogResult, memo: editLogMemo })
+      .eq('id', editingLogId);
+    setEditingLogId(null);
+    loadSidebarData(selectedLead);
+  };
+
+  const handleDeleteLog = async (logId: string) => {
+    if (!selectedLead) return;
+    await supabase.from('call_logs').delete().eq('id', logId);
+    loadSidebarData(selectedLead);
   };
 
   const handleCSVUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -539,21 +566,73 @@ export default function LeadsPage() {
                   <div className="space-y-3">
                     {sidebarCallLogs.map((log) => (
                       <div key={log.id} className="border-l-2 border-gray-200 pl-3 py-0.5">
-                        <div className="flex items-center gap-2">
-                          <span className={`inline-block px-1.5 py-0.5 rounded-full text-[10px] font-medium ${CALL_RESULT_COLORS[log.result].replace(/hover:\S+/g, '')}`}>
-                            {CALL_RESULT_LABELS[log.result]}
-                          </span>
-                          <span className="text-[10px] text-gray-400">
-                            {new Date(log.called_at).toLocaleString('ja-JP', {
-                              month: 'numeric',
-                              day: 'numeric',
-                              hour: '2-digit',
-                              minute: '2-digit',
-                            })}
-                          </span>
-                        </div>
-                        {log.memo && (
-                          <p className="text-xs text-gray-600 mt-0.5">{log.memo}</p>
+                        {editingLogId === log.id ? (
+                          // Edit mode
+                          <div className="space-y-2">
+                            <select
+                              value={editLogResult}
+                              onChange={(e) => setEditLogResult(e.target.value as CallResult)}
+                              className="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-1 focus:ring-slate-500 bg-white"
+                            >
+                              {(Object.keys(CALL_RESULT_LABELS) as CallResult[]).map((r) => (
+                                <option key={r} value={r}>{CALL_RESULT_LABELS[r]}</option>
+                              ))}
+                            </select>
+                            <textarea
+                              value={editLogMemo}
+                              onChange={(e) => setEditLogMemo(e.target.value)}
+                              rows={2}
+                              className="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-1 focus:ring-slate-500 resize-none"
+                              placeholder="メモ"
+                            />
+                            <div className="flex gap-1">
+                              <button
+                                onClick={handleSaveEditLog}
+                                className="px-2 py-1 bg-slate-800 text-white text-[10px] rounded hover:bg-slate-700"
+                              >
+                                保存
+                              </button>
+                              <button
+                                onClick={() => setEditingLogId(null)}
+                                className="px-2 py-1 text-[10px] text-gray-500 hover:text-gray-700"
+                              >
+                                キャンセル
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          // View mode
+                          <>
+                            <div className="flex items-center gap-2">
+                              <span className={`inline-block px-1.5 py-0.5 rounded-full text-[10px] font-medium ${CALL_RESULT_COLORS[log.result].replace(/hover:\S+/g, '')}`}>
+                                {CALL_RESULT_LABELS[log.result]}
+                              </span>
+                              <span className="text-[10px] text-gray-400">
+                                {new Date(log.called_at).toLocaleString('ja-JP', {
+                                  month: 'numeric',
+                                  day: 'numeric',
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                })}
+                              </span>
+                              <span className="flex-1" />
+                              <button
+                                onClick={() => handleStartEditLog(log)}
+                                className="text-[10px] text-gray-400 hover:text-blue-600"
+                              >
+                                編集
+                              </button>
+                              <button
+                                onClick={() => handleDeleteLog(log.id)}
+                                className="text-[10px] text-gray-400 hover:text-red-600"
+                              >
+                                削除
+                              </button>
+                            </div>
+                            {log.memo && (
+                              <p className="text-xs text-gray-600 mt-0.5">{log.memo}</p>
+                            )}
+                          </>
                         )}
                       </div>
                     ))}

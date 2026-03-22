@@ -70,6 +70,8 @@ create table public.call_logs (
 alter table public.call_logs enable row level security;
 create policy "Authenticated users can read all call_logs" on public.call_logs for select using (auth.role() = 'authenticated');
 create policy "Authenticated users can insert call_logs" on public.call_logs for insert with check (auth.role() = 'authenticated');
+create policy "Authenticated users can update call_logs" on public.call_logs for update using (auth.role() = 'authenticated');
+create policy "Authenticated users can delete call_logs" on public.call_logs for delete using (auth.role() = 'authenticated');
 
 -- ============================================
 -- 4. TARGETS TABLE
