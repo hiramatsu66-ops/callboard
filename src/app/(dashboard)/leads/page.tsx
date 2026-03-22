@@ -47,6 +47,15 @@ export default function LeadsPage() {
   const [editLogResult, setEditLogResult] = useState<CallResult>('no_answer');
   const [editLogMemo, setEditLogMemo] = useState('');
 
+  // Inline edit state: { leadId-field: value }
+  const [editingCell, setEditingCell] = useState<string | null>(null);
+  const [editCellValue, setEditCellValue] = useState('');
+
+  // Bulk selection
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkAssignTo, setBulkAssignTo] = useState('');
+  const [bulkStatus, setBulkStatus] = useState('');
+
   const supabase = createClient();
 
   const loadLeads = useCallback(async () => {
@@ -131,7 +140,6 @@ export default function LeadsPage() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
-    // Insert call log with current timestamp
     await supabase.from('call_logs').insert({
       lead_id: selectedLead.id,
       caller_id: user.id,
@@ -139,7 +147,6 @@ export default function LeadsPage() {
       memo: activityMemo,
     });
 
-    // Update lead status based on result
     let newStatus: LeadStatus = selectedLead.status;
     if (result === 'appointment') newStatus = 'appointment';
     else if (result === 'connected') newStatus = 'contacted';
@@ -147,7 +154,6 @@ export default function LeadsPage() {
     else if (result === 'rejected') newStatus = 'dnc';
     else if (newStatus === 'new') newStatus = 'calling';
 
-    // Update lead with new status and next_activity_date
     await supabase
       .from('leads')
       .update({
@@ -156,7 +162,6 @@ export default function LeadsPage() {
       })
       .eq('id', selectedLead.id);
 
-    // Refresh
     setActivityMemo('');
     const { data: updatedLead } = await supabase
       .from('leads')
@@ -201,6 +206,76 @@ export default function LeadsPage() {
     if (!selectedLead) return;
     await supabase.from('call_logs').delete().eq('id', logId);
     loadSidebarData(selectedLead);
+  };
+
+  // --- Inline cell editing ---
+  const startEditCell = (leadId: string, field: string, currentValue: string) => {
+    setEditingCell(`${leadId}-${field}`);
+    setEditCellValue(currentValue);
+  };
+
+  const saveCell = async (leadId: string, field: string) => {
+    const updateData: Record<string, unknown> = {};
+    if (field === 'assigned_to') {
+      updateData[field] = editCellValue || null;
+    } else if (field === 'next_activity_date') {
+      updateData[field] = editCellValue || null;
+    } else if (field === 'status') {
+      updateData[field] = editCellValue;
+    } else {
+      updateData[field] = editCellValue;
+    }
+    await supabase.from('leads').update(updateData).eq('id', leadId);
+    setEditingCell(null);
+    loadLeads();
+  };
+
+  const cancelEditCell = () => {
+    setEditingCell(null);
+  };
+
+  const isEditing = (leadId: string, field: string) => editingCell === `${leadId}-${field}`;
+
+  // --- Bulk operations ---
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === leads.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(leads.map(l => l.id)));
+    }
+  };
+
+  const handleBulkAssign = async () => {
+    if (selectedIds.size === 0) return;
+    const ids = Array.from(selectedIds);
+    await supabase
+      .from('leads')
+      .update({ assigned_to: bulkAssignTo || null })
+      .in('id', ids);
+    setSelectedIds(new Set());
+    setBulkAssignTo('');
+    loadLeads();
+  };
+
+  const handleBulkStatus = async () => {
+    if (selectedIds.size === 0 || !bulkStatus) return;
+    const ids = Array.from(selectedIds);
+    await supabase
+      .from('leads')
+      .update({ status: bulkStatus })
+      .in('id', ids);
+    setSelectedIds(new Set());
+    setBulkStatus('');
+    loadLeads();
   };
 
   const handleCSVUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -264,6 +339,38 @@ export default function LeadsPage() {
 
   const totalPages = Math.ceil(totalCount / PAGE_SIZE);
 
+  // Helper: render editable text cell
+  const renderEditableText = (lead: Lead, field: keyof Lead, displayValue: string) => {
+    if (isEditing(lead.id, field)) {
+      return (
+        <input
+          type="text"
+          value={editCellValue}
+          onChange={(e) => setEditCellValue(e.target.value)}
+          onBlur={() => saveCell(lead.id, field)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') saveCell(lead.id, field);
+            if (e.key === 'Escape') cancelEditCell();
+          }}
+          autoFocus
+          className="w-full px-1 py-0.5 border border-blue-400 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+          onClick={(e) => e.stopPropagation()}
+        />
+      );
+    }
+    return (
+      <span
+        className="cursor-text hover:bg-blue-50 px-1 py-0.5 rounded -mx-1 block"
+        onClick={(e) => {
+          e.stopPropagation();
+          startEditCell(lead.id, field, (lead[field] as string) || '');
+        }}
+      >
+        {displayValue || '-'}
+      </span>
+    );
+  };
+
   return (
     <div className="flex h-full">
       {/* Main content */}
@@ -285,6 +392,56 @@ export default function LeadsPage() {
             </button>
           </div>
         </div>
+
+        {/* Bulk actions bar */}
+        {selectedIds.size > 0 && (
+          <div className="flex items-center gap-3 bg-blue-50 border border-blue-200 rounded-lg px-4 py-2">
+            <span className="text-sm font-medium text-blue-800">{selectedIds.size}件選択中</span>
+            <div className="flex items-center gap-2 ml-auto">
+              <select
+                value={bulkAssignTo}
+                onChange={(e) => setBulkAssignTo(e.target.value)}
+                className="px-2 py-1 border border-gray-300 rounded text-sm bg-white"
+              >
+                <option value="">担当を選択</option>
+                <option value="">未割当</option>
+                {profiles.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+              <button
+                onClick={handleBulkAssign}
+                className="px-3 py-1 bg-slate-800 text-white text-sm rounded hover:bg-slate-700"
+              >
+                担当を一括変更
+              </button>
+              <span className="text-gray-300">|</span>
+              <select
+                value={bulkStatus}
+                onChange={(e) => setBulkStatus(e.target.value)}
+                className="px-2 py-1 border border-gray-300 rounded text-sm bg-white"
+              >
+                <option value="">ステータスを選択</option>
+                {Object.entries(LEAD_STATUS_LABELS).map(([key, label]) => (
+                  <option key={key} value={key}>{label}</option>
+                ))}
+              </select>
+              <button
+                onClick={handleBulkStatus}
+                disabled={!bulkStatus}
+                className="px-3 py-1 bg-slate-800 text-white text-sm rounded hover:bg-slate-700 disabled:opacity-50"
+              >
+                ステータスを一括変更
+              </button>
+              <button
+                onClick={() => setSelectedIds(new Set())}
+                className="px-2 py-1 text-sm text-gray-500 hover:text-gray-700"
+              >
+                選択解除
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Filters */}
         <div className="flex items-center gap-4">
@@ -349,88 +506,202 @@ export default function LeadsPage() {
                 <table className="w-full">
                   <thead>
                     <tr className="bg-gray-50 border-b border-gray-200">
-                      <th className="text-left py-3 px-4 text-sm font-medium text-gray-500">
-                        会社名
+                      <th className="py-3 px-3 w-8">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.size === leads.length && leads.length > 0}
+                          onChange={toggleSelectAll}
+                          className="rounded border-gray-300"
+                        />
                       </th>
-                      <th className="text-left py-3 px-4 text-sm font-medium text-gray-500">
-                        担当者名
-                      </th>
-                      <th className="text-left py-3 px-4 text-sm font-medium text-gray-500">
-                        電話番号
-                      </th>
-                      <th className="text-left py-3 px-4 text-sm font-medium text-gray-500">
-                        HP
-                      </th>
-                      <th className="text-left py-3 px-4 text-sm font-medium text-gray-500">
-                        ステータス
-                      </th>
-                      <th className="text-left py-3 px-4 text-sm font-medium text-gray-500">
-                        次回予定
-                      </th>
-                      <th className="text-left py-3 px-4 text-sm font-medium text-gray-500">
-                        担当
-                      </th>
-                      <th className="text-left py-3 px-4 text-sm font-medium text-gray-500">
-                        更新日
-                      </th>
+                      <th className="text-left py-3 px-3 text-sm font-medium text-gray-500">会社名</th>
+                      <th className="text-left py-3 px-3 text-sm font-medium text-gray-500">担当者名</th>
+                      <th className="text-left py-3 px-3 text-sm font-medium text-gray-500">電話番号</th>
+                      <th className="text-left py-3 px-3 text-sm font-medium text-gray-500">HP</th>
+                      <th className="text-left py-3 px-3 text-sm font-medium text-gray-500">ステータス</th>
+                      <th className="text-left py-3 px-3 text-sm font-medium text-gray-500">次回予定</th>
+                      <th className="text-left py-3 px-3 text-sm font-medium text-gray-500">担当</th>
+                      <th className="text-left py-3 px-3 text-sm font-medium text-gray-500">メモ</th>
                     </tr>
                   </thead>
                   <tbody>
                     {leads.map((lead) => (
                       <tr
                         key={lead.id}
-                        onClick={() => handleSelectLead(lead)}
-                        className={`border-b border-gray-100 hover:bg-gray-50 cursor-pointer transition-colors ${
+                        className={`border-b border-gray-100 hover:bg-gray-50 transition-colors ${
                           selectedLead?.id === lead.id ? 'bg-blue-50 hover:bg-blue-50' : ''
                         }`}
                       >
-                        <td className="py-3 px-4 text-sm font-medium text-gray-800">
-                          {lead.company_name}
+                        {/* Checkbox */}
+                        <td className="py-2 px-3" onClick={(e) => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.has(lead.id)}
+                            onChange={() => toggleSelect(lead.id)}
+                            className="rounded border-gray-300"
+                          />
                         </td>
-                        <td className="py-3 px-4 text-sm text-gray-600">
-                          {lead.contact_name || '-'}
+                        {/* Company name */}
+                        <td className="py-2 px-3 text-sm font-medium text-gray-800">
+                          {renderEditableText(lead, 'company_name', lead.company_name)}
                         </td>
-                        <td className="py-3 px-4 text-sm text-gray-600">
-                          {lead.phone}
+                        {/* Contact name */}
+                        <td className="py-2 px-3 text-sm text-gray-600">
+                          {renderEditableText(lead, 'contact_name', lead.contact_name || '')}
                         </td>
-                        <td className="py-3 px-4 text-sm text-gray-600">
-                          {lead.homepage ? (
-                            <a
-                              href={lead.homepage.startsWith('http') ? lead.homepage : `https://${lead.homepage}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
+                        {/* Phone */}
+                        <td className="py-2 px-3 text-sm text-gray-600">
+                          {renderEditableText(lead, 'phone', lead.phone)}
+                        </td>
+                        {/* Homepage */}
+                        <td className="py-2 px-3 text-sm text-gray-600">
+                          {isEditing(lead.id, 'homepage') ? (
+                            <input
+                              type="text"
+                              value={editCellValue}
+                              onChange={(e) => setEditCellValue(e.target.value)}
+                              onBlur={() => saveCell(lead.id, 'homepage')}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') saveCell(lead.id, 'homepage');
+                                if (e.key === 'Escape') cancelEditCell();
+                              }}
+                              autoFocus
+                              className="w-full px-1 py-0.5 border border-blue-400 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
                               onClick={(e) => e.stopPropagation()}
-                              className="text-blue-600 hover:underline"
-                            >
-                              {lead.homepage.replace(/^https?:\/\//, '').replace(/\/$/, '')}
-                            </a>
-                          ) : '-'}
-                        </td>
-                        <td className="py-3 px-4">
-                          <span
-                            className={`inline-block px-2 py-1 rounded-full text-xs font-medium ${LEAD_STATUS_COLORS[lead.status]}`}
-                          >
-                            {LEAD_STATUS_LABELS[lead.status]}
-                          </span>
-                        </td>
-                        <td className="py-3 px-4 text-sm text-gray-600">
-                          {lead.next_activity_date ? (
-                            <span className={
-                              new Date(lead.next_activity_date) < new Date(new Date().toDateString())
-                                ? 'text-red-600 font-medium'
-                                : new Date(lead.next_activity_date).toDateString() === new Date().toDateString()
-                                ? 'text-amber-600 font-medium'
-                                : ''
-                            }>
-                              {new Date(lead.next_activity_date).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' })}
+                            />
+                          ) : lead.homepage ? (
+                            <span className="flex items-center gap-1">
+                              <a
+                                href={lead.homepage.startsWith('http') ? lead.homepage : `https://${lead.homepage}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                                className="text-blue-600 hover:underline truncate max-w-[120px] inline-block"
+                              >
+                                {lead.homepage.replace(/^https?:\/\//, '').replace(/\/$/, '')}
+                              </a>
+                              <button
+                                onClick={(e) => { e.stopPropagation(); startEditCell(lead.id, 'homepage', lead.homepage || ''); }}
+                                className="text-gray-400 hover:text-blue-600 flex-shrink-0"
+                              >
+                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+                              </button>
                             </span>
-                          ) : '-'}
+                          ) : (
+                            <span
+                              className="cursor-text hover:bg-blue-50 px-1 py-0.5 rounded -mx-1 block text-gray-400"
+                              onClick={(e) => { e.stopPropagation(); startEditCell(lead.id, 'homepage', ''); }}
+                            >
+                              -
+                            </span>
+                          )}
                         </td>
-                        <td className="py-3 px-4 text-sm text-gray-600">
-                          {profiles.find(p => p.id === lead.assigned_to)?.name || '未割当'}
+                        {/* Status */}
+                        <td className="py-2 px-3" onClick={(e) => e.stopPropagation()}>
+                          {isEditing(lead.id, 'status') ? (
+                            <select
+                              value={editCellValue}
+                              onChange={(e) => { setEditCellValue(e.target.value); }}
+                              onBlur={() => saveCell(lead.id, 'status')}
+                              autoFocus
+                              className="px-1 py-0.5 border border-blue-400 rounded text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+                            >
+                              {Object.entries(LEAD_STATUS_LABELS).map(([key, label]) => (
+                                <option key={key} value={key}>{label}</option>
+                              ))}
+                            </select>
+                          ) : (
+                            <span
+                              className={`inline-block px-2 py-1 rounded-full text-xs font-medium cursor-pointer hover:opacity-80 ${LEAD_STATUS_COLORS[lead.status]}`}
+                              onClick={() => startEditCell(lead.id, 'status', lead.status)}
+                            >
+                              {LEAD_STATUS_LABELS[lead.status]}
+                            </span>
+                          )}
                         </td>
-                        <td className="py-3 px-4 text-sm text-gray-400">
-                          {new Date(lead.updated_at).toLocaleDateString('ja-JP')}
+                        {/* Next activity date */}
+                        <td className="py-2 px-3 text-sm" onClick={(e) => e.stopPropagation()}>
+                          {isEditing(lead.id, 'next_activity_date') ? (
+                            <input
+                              type="date"
+                              value={editCellValue}
+                              onChange={(e) => setEditCellValue(e.target.value)}
+                              onBlur={() => saveCell(lead.id, 'next_activity_date')}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') saveCell(lead.id, 'next_activity_date');
+                                if (e.key === 'Escape') cancelEditCell();
+                              }}
+                              autoFocus
+                              className="px-1 py-0.5 border border-blue-400 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+                            />
+                          ) : (
+                            <span
+                              className={`cursor-text hover:bg-blue-50 px-1 py-0.5 rounded -mx-1 block ${
+                                lead.next_activity_date
+                                  ? new Date(lead.next_activity_date) < new Date(new Date().toDateString())
+                                    ? 'text-red-600 font-medium'
+                                    : new Date(lead.next_activity_date).toDateString() === new Date().toDateString()
+                                    ? 'text-amber-600 font-medium'
+                                    : 'text-gray-600'
+                                  : 'text-gray-400'
+                              }`}
+                              onClick={() => startEditCell(lead.id, 'next_activity_date', lead.next_activity_date || '')}
+                            >
+                              {lead.next_activity_date
+                                ? new Date(lead.next_activity_date).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' })
+                                : '-'}
+                            </span>
+                          )}
+                        </td>
+                        {/* Assigned to */}
+                        <td className="py-2 px-3 text-sm" onClick={(e) => e.stopPropagation()}>
+                          {isEditing(lead.id, 'assigned_to') ? (
+                            <select
+                              value={editCellValue}
+                              onChange={(e) => setEditCellValue(e.target.value)}
+                              onBlur={() => saveCell(lead.id, 'assigned_to')}
+                              autoFocus
+                              className="px-1 py-0.5 border border-blue-400 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+                            >
+                              <option value="">未割当</option>
+                              {profiles.map((p) => (
+                                <option key={p.id} value={p.id}>{p.name}</option>
+                              ))}
+                            </select>
+                          ) : (
+                            <span
+                              className="cursor-text hover:bg-blue-50 px-1 py-0.5 rounded -mx-1 block text-gray-600"
+                              onClick={() => startEditCell(lead.id, 'assigned_to', lead.assigned_to || '')}
+                            >
+                              {profiles.find(p => p.id === lead.assigned_to)?.name || '未割当'}
+                            </span>
+                          )}
+                        </td>
+                        {/* Memo */}
+                        <td className="py-2 px-3 text-sm text-gray-500 max-w-[150px]">
+                          {isEditing(lead.id, 'memo') ? (
+                            <input
+                              type="text"
+                              value={editCellValue}
+                              onChange={(e) => setEditCellValue(e.target.value)}
+                              onBlur={() => saveCell(lead.id, 'memo')}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') saveCell(lead.id, 'memo');
+                                if (e.key === 'Escape') cancelEditCell();
+                              }}
+                              autoFocus
+                              className="w-full px-1 py-0.5 border border-blue-400 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+                              onClick={(e) => e.stopPropagation()}
+                            />
+                          ) : (
+                            <span
+                              className="cursor-text hover:bg-blue-50 px-1 py-0.5 rounded -mx-1 block truncate"
+                              onClick={(e) => { e.stopPropagation(); startEditCell(lead.id, 'memo', lead.memo || ''); }}
+                              title={lead.memo || ''}
+                            >
+                              {lead.memo || '-'}
+                            </span>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -567,7 +838,6 @@ export default function LeadsPage() {
                     {sidebarCallLogs.map((log) => (
                       <div key={log.id} className="border-l-2 border-gray-200 pl-3 py-0.5">
                         {editingLogId === log.id ? (
-                          // Edit mode
                           <div className="space-y-2">
                             <select
                               value={editLogResult}
@@ -601,7 +871,6 @@ export default function LeadsPage() {
                             </div>
                           </div>
                         ) : (
-                          // View mode
                           <>
                             <div className="flex items-center gap-2">
                               <span className={`inline-block px-1.5 py-0.5 rounded-full text-[10px] font-medium ${CALL_RESULT_COLORS[log.result].replace(/hover:\S+/g, '')}`}>
