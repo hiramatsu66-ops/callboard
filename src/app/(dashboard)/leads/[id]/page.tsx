@@ -26,6 +26,7 @@ export default function LeadDetailPage({
     company_name: '',
     phone: '',
     contact_name: '',
+    homepage: '',
     status: '' as LeadStatus,
     assigned_to: '' as string | null,
     memo: '',
@@ -49,6 +50,7 @@ export default function LeadDetailPage({
         company_name: data.company_name,
         phone: data.phone,
         contact_name: data.contact_name || '',
+        homepage: data.homepage || '',
         status: data.status,
         assigned_to: data.assigned_to,
         memo: data.memo || '',
@@ -124,6 +126,7 @@ export default function LeadDetailPage({
         company_name: editForm.company_name,
         phone: editForm.phone,
         contact_name: editForm.contact_name,
+        homepage: editForm.homepage,
         status: editForm.status,
         assigned_to: editForm.assigned_to || null,
         memo: editForm.memo,
@@ -252,6 +255,23 @@ export default function LeadDetailPage({
                 </div>
                 <div>
                   <label className="block text-xs text-gray-500 mb-1">
+                    HP
+                  </label>
+                  <input
+                    type="url"
+                    value={editForm.homepage}
+                    onChange={(e) =>
+                      setEditForm({
+                        ...editForm,
+                        homepage: e.target.value,
+                      })
+                    }
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-500"
+                    placeholder="https://example.com"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">
                     ステータス
                   </label>
                   <select
@@ -324,6 +344,21 @@ export default function LeadDetailPage({
                   label="担当者名"
                   value={lead.contact_name || '-'}
                 />
+                <div>
+                  <p className="text-xs text-gray-400">HP</p>
+                  {lead.homepage ? (
+                    <a
+                      href={lead.homepage.startsWith('http') ? lead.homepage : `https://${lead.homepage}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-sm text-blue-600 hover:underline mt-0.5 block"
+                    >
+                      {lead.homepage.replace(/^https?:\/\//, '').replace(/\/$/, '')}
+                    </a>
+                  ) : (
+                    <p className="text-sm text-gray-800 mt-0.5">-</p>
+                  )}
+                </div>
                 <InfoRow
                   label="架電担当"
                   value={lead.profiles?.name || '未割当'}

@@ -12,6 +12,7 @@ export interface Lead {
   company_name: string;
   phone: string;
   contact_name: string;
+  homepage: string;
   status: LeadStatus;
   memo: string;
   assigned_to: string | null;

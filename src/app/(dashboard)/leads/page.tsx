@@ -28,6 +28,9 @@ export default function LeadsPage() {
   const [showImportModal, setShowImportModal] = useState(false);
   const [csvData, setCsvData] = useState<Record<string, string>[]>([]);
   const [importing, setImporting] = useState(false);
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [addForm, setAddForm] = useState({ company_name: '', phone: '', contact_name: '', homepage: '', memo: '' });
+  const [adding, setAdding] = useState(false);
 
   const router = useRouter();
   const supabase = createClient();
@@ -106,6 +109,7 @@ export default function LeadsPage() {
       company_name: row['会社名'] || row['company_name'] || '',
       phone: row['電話番号'] || row['phone'] || '',
       contact_name: row['担当者名'] || row['contact_name'] || '',
+      homepage: row['HP'] || row['homepage'] || row['URL'] || '',
       status: 'new' as const,
       memo: row['メモ'] || row['memo'] || '',
     }));
@@ -125,18 +129,44 @@ export default function LeadsPage() {
     loadLeads();
   };
 
+  const handleAdd = async () => {
+    if (!addForm.company_name || !addForm.phone) return;
+    setAdding(true);
+    await supabase.from('leads').insert({
+      company_name: addForm.company_name,
+      phone: addForm.phone,
+      contact_name: addForm.contact_name || '',
+      homepage: addForm.homepage || '',
+      status: 'new' as const,
+      memo: addForm.memo || '',
+    });
+    setShowAddModal(false);
+    setAddForm({ company_name: '', phone: '', contact_name: '', homepage: '', memo: '' });
+    setAdding(false);
+    setPage(0);
+    loadLeads();
+  };
+
   const totalPages = Math.ceil(totalCount / PAGE_SIZE);
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-800">架電リスト</h1>
-        <button
-          onClick={() => setShowImportModal(true)}
-          className="px-4 py-2 bg-slate-800 text-white text-sm font-medium rounded-lg hover:bg-slate-700 transition-colors"
-        >
-          CSVインポート
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setShowAddModal(true)}
+            className="px-4 py-2 bg-slate-800 text-white text-sm font-medium rounded-lg hover:bg-slate-700 transition-colors"
+          >
+            新規追加
+          </button>
+          <button
+            onClick={() => setShowImportModal(true)}
+            className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors"
+          >
+            CSVインポート
+          </button>
+        </div>
       </div>
 
       {/* Filters */}
@@ -211,6 +241,9 @@ export default function LeadsPage() {
                     電話番号
                   </th>
                   <th className="text-left py-3 px-4 text-sm font-medium text-gray-500">
+                    HP
+                  </th>
+                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-500">
                     ステータス
                   </th>
                   <th className="text-left py-3 px-4 text-sm font-medium text-gray-500">
@@ -236,6 +269,19 @@ export default function LeadsPage() {
                     </td>
                     <td className="py-3 px-4 text-sm text-gray-600">
                       {lead.phone}
+                    </td>
+                    <td className="py-3 px-4 text-sm text-gray-600">
+                      {lead.homepage ? (
+                        <a
+                          href={lead.homepage.startsWith('http') ? lead.homepage : `https://${lead.homepage}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className="text-blue-600 hover:underline"
+                        >
+                          {lead.homepage.replace(/^https?:\/\//, '').replace(/\/$/, '')}
+                        </a>
+                      ) : '-'}
                     </td>
                     <td className="py-3 px-4">
                       <span
@@ -286,6 +332,102 @@ export default function LeadsPage() {
         )}
       </div>
 
+      {/* Add Lead Modal */}
+      {showAddModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-lg w-full max-w-md mx-4">
+            <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-gray-800">リード新規追加</h2>
+              <button
+                onClick={() => {
+                  setShowAddModal(false);
+                  setAddForm({ company_name: '', phone: '', contact_name: '', homepage: '', memo: '' });
+                }}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="px-6 py-4 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  会社名 <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={addForm.company_name}
+                  onChange={(e) => setAddForm({ ...addForm, company_name: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-500 focus:border-transparent"
+                  placeholder="例: 株式会社ABC"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  電話番号 <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="tel"
+                  value={addForm.phone}
+                  onChange={(e) => setAddForm({ ...addForm, phone: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-500 focus:border-transparent"
+                  placeholder="例: 03-1234-5678"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">担当者名</label>
+                <input
+                  type="text"
+                  value={addForm.contact_name}
+                  onChange={(e) => setAddForm({ ...addForm, contact_name: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-500 focus:border-transparent"
+                  placeholder="例: 田中太郎"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">HP</label>
+                <input
+                  type="url"
+                  value={addForm.homepage}
+                  onChange={(e) => setAddForm({ ...addForm, homepage: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-500 focus:border-transparent"
+                  placeholder="例: https://example.com"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">メモ</label>
+                <textarea
+                  value={addForm.memo}
+                  onChange={(e) => setAddForm({ ...addForm, memo: e.target.value })}
+                  rows={3}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-500 focus:border-transparent resize-none"
+                  placeholder="備考があれば入力してください"
+                />
+              </div>
+            </div>
+            <div className="px-6 py-4 border-t border-gray-200 flex justify-end gap-3">
+              <button
+                onClick={() => {
+                  setShowAddModal(false);
+                  setAddForm({ company_name: '', phone: '', contact_name: '', homepage: '', memo: '' });
+                }}
+                className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800"
+              >
+                キャンセル
+              </button>
+              <button
+                onClick={handleAdd}
+                disabled={!addForm.company_name || !addForm.phone || adding}
+                className="px-4 py-2 bg-slate-800 text-white text-sm font-medium rounded-lg hover:bg-slate-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {adding ? '追加中...' : '追加'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* CSV Import Modal */}
       {showImportModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
@@ -318,7 +460,7 @@ export default function LeadsPage() {
             </div>
             <div className="px-6 py-4">
               <p className="text-sm text-gray-600 mb-4">
-                CSVファイルをアップロードしてください。ヘッダー行に「会社名」「電話番号」「担当者名」「メモ」を含めてください。
+                CSVファイルをアップロードしてください。ヘッダー行に「会社名」「電話番号」「担当者名」「HP」「メモ」を含めてください。
               </p>
               <input
                 type="file"

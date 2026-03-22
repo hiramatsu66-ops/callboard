@@ -39,6 +39,7 @@ create table public.leads (
   company_name text not null,
   phone text not null,
   contact_name text default '',
+  homepage text default '',
   status text not null default 'new' check (status in ('new','calling','contacted','appointment','excluded','dnc')),
   memo text default '',
   assigned_to uuid references public.profiles(id),
