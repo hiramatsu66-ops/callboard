@@ -33,47 +33,53 @@ export default function LeadsPage() {
   const supabase = createClient();
 
   const loadLeads = useCallback(async () => {
-    setLoading(true);
+    try {
+      setLoading(true);
 
-    let query = supabase
-      .from('leads')
-      .select('*', { count: 'exact' });
+      let query = supabase
+        .from('leads')
+        .select('*', { count: 'exact' });
 
-    if (search) {
-      query = query.or(
-        `company_name.ilike.%${search}%,contact_name.ilike.%${search}%,phone.ilike.%${search}%`
-      );
-    }
-
-    if (statusFilter !== 'all') {
-      query = query.eq('status', statusFilter);
-    }
-
-    if (assignedFilter !== 'all') {
-      if (assignedFilter === 'unassigned') {
-        query = query.is('assigned_to', null);
-      } else {
-        query = query.eq('assigned_to', assignedFilter);
+      if (search) {
+        query = query.or(
+          `company_name.ilike.%${search}%,contact_name.ilike.%${search}%,phone.ilike.%${search}%`
+        );
       }
+
+      if (statusFilter !== 'all') {
+        query = query.eq('status', statusFilter);
+      }
+
+      if (assignedFilter !== 'all') {
+        if (assignedFilter === 'unassigned') {
+          query = query.is('assigned_to', null);
+        } else {
+          query = query.eq('assigned_to', assignedFilter);
+        }
+      }
+
+      const { data, count } = await query
+        .order('created_at', { ascending: false })
+        .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
+
+      setLeads(data || []);
+      setTotalCount(count || 0);
+    } catch (err) {
+      console.error('Load leads error:', err);
+    } finally {
+      setLoading(false);
     }
-
-    const { data, count } = await query
-      .order('created_at', { ascending: false })
-      .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
-
-    setLeads(data || []);
-    setTotalCount(count || 0);
-    setLoading(false);
-  }, [page, search, statusFilter, assignedFilter, supabase]);
-
-  const loadProfiles = useCallback(async () => {
-    const { data } = await supabase.from('profiles').select('*');
-    setProfiles(data || []);
-  }, [supabase]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, search, statusFilter, assignedFilter]);
 
   useEffect(() => {
+    const loadProfiles = async () => {
+      const { data } = await supabase.from('profiles').select('*');
+      setProfiles(data || []);
+    };
     loadProfiles();
-  }, [loadProfiles]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     loadLeads();
@@ -239,7 +245,7 @@ export default function LeadsPage() {
                       </span>
                     </td>
                     <td className="py-3 px-4 text-sm text-gray-600">
-                      {lead.profiles?.name || '未割当'}
+                      {profiles.find(p => p.id === lead.assigned_to)?.name || '未割当'}
                     </td>
                     <td className="py-3 px-4 text-sm text-gray-400">
                       {new Date(lead.updated_at).toLocaleDateString('ja-JP')}

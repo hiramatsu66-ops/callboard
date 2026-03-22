@@ -25,51 +25,56 @@ export default function TargetsPage() {
   const supabase = createClient();
 
   const loadData = useCallback(async () => {
-    setLoading(true);
+    try {
+      setLoading(true);
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) return;
-    setCurrentUserId(user.id);
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) { setLoading(false); return; }
+      setCurrentUserId(user.id);
 
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', user.id)
-      .single();
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', user.id)
+        .single();
 
-    if (profile) {
-      setCurrentUserRole(profile.role);
+      if (profile) {
+        setCurrentUserRole(profile.role);
+      }
+
+      const { data: profilesData } = await supabase
+        .from('profiles')
+        .select('*');
+      setProfiles(profilesData || []);
+
+      const { data: targetsData } = await supabase
+        .from('targets')
+        .select('*')
+        .order('period_start', { ascending: false });
+
+      setTargets(targetsData || []);
+
+      // Pre-fill form with existing target if any
+      const existingTarget = (targetsData || []).find(
+        (t) =>
+          t.user_id === user.id &&
+          t.period_type === 'monthly' &&
+          t.period_start === format(startOfMonth(new Date()), 'yyyy-MM-dd')
+      );
+      if (existingTarget) {
+        setTargetCalls(existingTarget.target_calls);
+        setTargetConnects(existingTarget.target_connects);
+        setTargetAppointments(existingTarget.target_appointments);
+      }
+    } catch (err) {
+      console.error('Load targets error:', err);
+    } finally {
+      setLoading(false);
     }
-
-    const { data: profilesData } = await supabase
-      .from('profiles')
-      .select('*');
-    setProfiles(profilesData || []);
-
-    const { data: targetsData } = await supabase
-      .from('targets')
-      .select('*, profiles(*)')
-      .order('period_start', { ascending: false });
-
-    setTargets(targetsData || []);
-
-    // Pre-fill form with existing target if any
-    const existingTarget = (targetsData || []).find(
-      (t) =>
-        t.user_id === user.id &&
-        t.period_type === 'monthly' &&
-        t.period_start === format(startOfMonth(new Date()), 'yyyy-MM-dd')
-    );
-    if (existingTarget) {
-      setTargetCalls(existingTarget.target_calls);
-      setTargetConnects(existingTarget.target_connects);
-      setTargetAppointments(existingTarget.target_appointments);
-    }
-
-    setLoading(false);
-  }, [supabase]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     loadData();
@@ -256,7 +261,7 @@ export default function TargetsPage() {
                     className="border-b border-gray-100 hover:bg-gray-50 transition-colors"
                   >
                     <td className="py-3 px-4 text-sm font-medium text-gray-800">
-                      {target.profiles?.name || '不明'}
+                      {profiles.find(p => p.id === target.user_id)?.name || '不明'}
                     </td>
                     <td className="py-3 px-4 text-sm text-gray-600">
                       {periodLabel(target.period_type)}
