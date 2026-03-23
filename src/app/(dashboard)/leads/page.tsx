@@ -18,7 +18,7 @@ import {
 } from '@/lib/types';
 import Papa from 'papaparse';
 
-const PAGE_SIZE = 15;
+const PAGE_SIZE = 50;
 const supabase = createClient();
 
 export default function LeadsPage() {
