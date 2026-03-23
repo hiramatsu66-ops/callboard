@@ -5,15 +5,17 @@ export interface Profile {
   created_at: string;
 }
 
-export type LeadStatus = 'new' | 'calling' | 'contacted' | 'appointment' | 'excluded' | 'dnc';
+export type LeadStatus = 'new' | 'unreviewed' | 'calling' | 'contacted' | 'appointment' | 'excluded' | 'dnc';
 
 export interface Lead {
   id: string;
   company_name: string;
   phone: string;
   contact_name: string;
+  email: string;
   homepage: string;
   lead_source: string;
+  inquiry_date: string | null;
   inquiry_content: string;
   next_activity_date: string | null;
   status: LeadStatus;
@@ -40,6 +42,15 @@ export interface CallLog {
   leads?: Lead;
 }
 
+export interface EmailTemplate {
+  id: string;
+  name: string;
+  subject: string;
+  body: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export type PeriodType = 'daily' | 'weekly' | 'monthly';
 
 export interface Target {
@@ -58,6 +69,7 @@ export interface Target {
 
 export const LEAD_STATUS_LABELS: Record<LeadStatus, string> = {
   new: '新規',
+  unreviewed: '未精査',
   calling: '架電中',
   contacted: '接触済',
   appointment: 'アポ獲得',
@@ -67,6 +79,7 @@ export const LEAD_STATUS_LABELS: Record<LeadStatus, string> = {
 
 export const LEAD_STATUS_COLORS: Record<LeadStatus, string> = {
   new: 'bg-blue-100 text-blue-800',
+  unreviewed: 'bg-yellow-100 text-yellow-800',
   calling: 'bg-amber-100 text-amber-800',
   contacted: 'bg-purple-100 text-purple-800',
   appointment: 'bg-green-100 text-green-800',
