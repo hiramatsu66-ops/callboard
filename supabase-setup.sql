@@ -45,7 +45,7 @@ create table public.leads (
   inquiry_date date,
   inquiry_content text default '',
   next_activity_date date,
-  status text not null default 'new' check (status in ('new','unreviewed','calling','contacted','appointment','excluded','dnc')),
+  status text not null default 'new' check (status in ('new','unreviewed','calling','contacted','appointment','excluded','dnc','duplicate')),
   memo text default '',
   assigned_to uuid references public.profiles(id),
   created_at timestamptz default now(),

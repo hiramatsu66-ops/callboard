@@ -5,7 +5,7 @@ export interface Profile {
   created_at: string;
 }
 
-export type LeadStatus = 'new' | 'unreviewed' | 'calling' | 'contacted' | 'appointment' | 'excluded' | 'dnc';
+export type LeadStatus = 'new' | 'unreviewed' | 'calling' | 'contacted' | 'appointment' | 'excluded' | 'dnc' | 'duplicate';
 
 export interface Lead {
   id: string;
@@ -75,6 +75,7 @@ export const LEAD_STATUS_LABELS: Record<LeadStatus, string> = {
   appointment: 'アポ獲得',
   excluded: '対象外',
   dnc: '架電禁止',
+  duplicate: '重複',
 };
 
 export const LEAD_STATUS_COLORS: Record<LeadStatus, string> = {
@@ -85,6 +86,7 @@ export const LEAD_STATUS_COLORS: Record<LeadStatus, string> = {
   appointment: 'bg-green-100 text-green-800',
   excluded: 'bg-gray-100 text-gray-800',
   dnc: 'bg-red-100 text-red-800',
+  duplicate: 'bg-orange-100 text-orange-800',
 };
 
 export const CALL_RESULT_LABELS: Record<CallResult, string> = {
