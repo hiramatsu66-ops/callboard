@@ -63,6 +63,8 @@ export default function LeadsPage() {
   const [bulkAssignTo, setBulkAssignTo] = useState('');
   const [bulkStatus, setBulkStatus] = useState('');
   const [selectAllPages, setSelectAllPages] = useState(false);
+  const [sortColumn, setSortColumn] = useState<string>('created_at');
+  const [sortAscending, setSortAscending] = useState(false);
 
   // Debounce search input
   useEffect(() => {
@@ -100,7 +102,7 @@ export default function LeadsPage() {
       }
 
       const { data, count } = await query
-        .order('created_at', { ascending: false })
+        .order(sortColumn, { ascending: sortAscending })
         .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
 
       setLeads(data || []);
@@ -111,7 +113,7 @@ export default function LeadsPage() {
       setLoading(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, debouncedSearch, statusFilter, assignedFilter]);
+  }, [page, debouncedSearch, statusFilter, assignedFilter, sortColumn, sortAscending]);
 
   useEffect(() => {
     const loadProfiles = async () => {
@@ -270,6 +272,16 @@ export default function LeadsPage() {
       else next.add(id);
       return next;
     });
+  };
+
+  const toggleSort = (column: string) => {
+    if (sortColumn === column) {
+      setSortAscending(!sortAscending);
+    } else {
+      setSortColumn(column);
+      setSortAscending(true);
+    }
+    setPage(0);
   };
 
   const toggleSelectAll = () => {
@@ -708,18 +720,29 @@ export default function LeadsPage() {
                           className="rounded border-gray-300"
                         />
                       </th>
-                      <th className="text-left py-3 px-3 text-sm font-medium text-gray-500">会社名</th>
-                      <th className="text-left py-3 px-3 text-sm font-medium text-gray-500">担当者名</th>
-                      <th className="text-left py-3 px-3 text-sm font-medium text-gray-500">電話番号</th>
-                      <th className="text-left py-3 px-3 text-sm font-medium text-gray-500">メール</th>
-                      <th className="text-left py-3 px-3 text-sm font-medium text-gray-500">HP</th>
-                      <th className="text-left py-3 px-3 text-sm font-medium text-gray-500">流入経路</th>
-                      <th className="text-left py-3 px-3 text-sm font-medium text-gray-500">問い合わせ日</th>
-                      <th className="text-left py-3 px-3 text-sm font-medium text-gray-500">問い合わせ内容</th>
-                      <th className="text-left py-3 px-3 text-sm font-medium text-gray-500">ステータス</th>
-                      <th className="text-left py-3 px-3 text-sm font-medium text-gray-500">次回予定</th>
-                      <th className="text-left py-3 px-3 text-sm font-medium text-gray-500">担当</th>
-                      <th className="text-left py-3 px-3 text-sm font-medium text-gray-500">メモ</th>
+                      {[
+                        { key: 'company_name', label: '会社名' },
+                        { key: 'contact_name', label: '担当者名' },
+                        { key: 'phone', label: '電話番号' },
+                        { key: 'email', label: 'メール' },
+                        { key: 'homepage', label: 'HP' },
+                        { key: 'lead_source', label: '流入経路' },
+                        { key: 'inquiry_date', label: '問い合わせ日' },
+                        { key: 'inquiry_content', label: '問い合わせ内容' },
+                        { key: 'status', label: 'ステータス' },
+                        { key: 'next_activity_date', label: '次回予定' },
+                        { key: 'assigned_to', label: '担当' },
+                        { key: 'memo', label: 'メモ' },
+                      ].map(({ key, label }) => (
+                        <th
+                          key={key}
+                          onClick={() => toggleSort(key)}
+                          className="text-left py-3 px-3 text-sm font-medium text-gray-500 cursor-pointer hover:text-gray-700 select-none"
+                        >
+                          {label}
+                          {sortColumn === key ? (sortAscending ? ' ▲' : ' ▼') : ''}
+                        </th>
+                      ))}
                     </tr>
                   </thead>
                   <tbody>
