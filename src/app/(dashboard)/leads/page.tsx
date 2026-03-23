@@ -29,6 +29,8 @@ export default function LeadsPage() {
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<LeadStatus | 'all'>('all');
+  const [excludedStatuses, setExcludedStatuses] = useState<Set<LeadStatus>>(new Set());
+  const [showStatusDropdown, setShowStatusDropdown] = useState(false);
   const [assignedFilter, setAssignedFilter] = useState<string>('all');
   const [loading, setLoading] = useState(true);
   const [showImportModal, setShowImportModal] = useState(false);
@@ -93,6 +95,12 @@ export default function LeadsPage() {
         query = query.eq('status', statusFilter);
       }
 
+      if (excludedStatuses.size > 0) {
+        for (const s of excludedStatuses) {
+          query = query.neq('status', s);
+        }
+      }
+
       if (assignedFilter !== 'all') {
         if (assignedFilter === 'unassigned') {
           query = query.is('assigned_to', null);
@@ -113,7 +121,8 @@ export default function LeadsPage() {
       setLoading(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, debouncedSearch, statusFilter, assignedFilter, sortColumn, sortAscending]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, debouncedSearch, statusFilter, assignedFilter, sortColumn, sortAscending, excludedStatuses]);
 
   useEffect(() => {
     const loadProfiles = async () => {
@@ -302,6 +311,11 @@ export default function LeadsPage() {
     }
     if (statusFilter !== 'all') {
       query = query.eq('status', statusFilter);
+    }
+    if (excludedStatuses.size > 0) {
+      for (const s of excludedStatuses) {
+        query = query.neq('status', s);
+      }
     }
     if (assignedFilter !== 'all') {
       if (assignedFilter === 'unassigned') {
@@ -663,21 +677,73 @@ export default function LeadsPage() {
               className="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-500 focus:border-transparent"
             />
           </div>
-          <select
-            value={statusFilter}
-            onChange={(e) => {
-              setStatusFilter(e.target.value as LeadStatus | 'all');
-              setPage(0);
-            }}
-            className="px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-500 bg-white"
-          >
-            <option value="all">全てのステータス</option>
-            {Object.entries(LEAD_STATUS_LABELS).map(([key, label]) => (
-              <option key={key} value={key}>
-                {label}
-              </option>
-            ))}
-          </select>
+          <div className="relative">
+            <button
+              onClick={() => setShowStatusDropdown(!showStatusDropdown)}
+              className="px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-500 bg-white flex items-center gap-2 min-w-[160px]"
+            >
+              <span>
+                {statusFilter !== 'all'
+                  ? LEAD_STATUS_LABELS[statusFilter]
+                  : excludedStatuses.size > 0
+                    ? `${excludedStatuses.size}件除外中`
+                    : '全てのステータス'}
+              </span>
+              <svg className="w-4 h-4 ml-auto text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+            {showStatusDropdown && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setShowStatusDropdown(false)} />
+                <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-20 min-w-[220px] py-1">
+                  <button
+                    onClick={() => { setStatusFilter('all'); setExcludedStatuses(new Set()); setPage(0); setShowStatusDropdown(false); }}
+                    className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 ${statusFilter === 'all' && excludedStatuses.size === 0 ? 'font-medium text-blue-600' : ''}`}
+                  >
+                    全てのステータス
+                  </button>
+                  <div className="border-t border-gray-100 my-1" />
+                  <p className="px-3 py-1 text-xs text-gray-400">絞り込み（クリック）</p>
+                  {Object.entries(LEAD_STATUS_LABELS).map(([key, label]) => (
+                    <button
+                      key={`include-${key}`}
+                      onClick={() => { setStatusFilter(key as LeadStatus); setExcludedStatuses(new Set()); setPage(0); setShowStatusDropdown(false); }}
+                      className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 ${statusFilter === key ? 'font-medium text-blue-600' : ''}`}
+                    >
+                      <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${LEAD_STATUS_COLORS[key as LeadStatus]}`}>{label}</span>
+                    </button>
+                  ))}
+                  <div className="border-t border-gray-100 my-1" />
+                  <p className="px-3 py-1 text-xs text-gray-400">除外（チェックで除外）</p>
+                  {Object.entries(LEAD_STATUS_LABELS).map(([key, label]) => (
+                    <label
+                      key={`exclude-${key}`}
+                      className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-gray-50 cursor-pointer"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={excludedStatuses.has(key as LeadStatus)}
+                        onChange={() => {
+                          const next = new Set(excludedStatuses);
+                          if (next.has(key as LeadStatus)) {
+                            next.delete(key as LeadStatus);
+                          } else {
+                            next.add(key as LeadStatus);
+                          }
+                          setExcludedStatuses(next);
+                          setStatusFilter('all');
+                          setPage(0);
+                        }}
+                        className="rounded border-gray-300"
+                      />
+                      <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${LEAD_STATUS_COLORS[key as LeadStatus]}`}>{label}</span>
+                    </label>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
           <select
             value={assignedFilter}
             onChange={(e) => {
