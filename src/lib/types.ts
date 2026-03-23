@@ -13,6 +13,8 @@ export interface Lead {
   phone: string;
   contact_name: string;
   homepage: string;
+  lead_source: string;
+  inquiry_content: string;
   next_activity_date: string | null;
   status: LeadStatus;
   memo: string;

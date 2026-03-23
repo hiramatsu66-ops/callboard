@@ -32,7 +32,7 @@ export default function LeadsPage() {
   const [csvData, setCsvData] = useState<Record<string, string>[]>([]);
   const [importing, setImporting] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
-  const [addForm, setAddForm] = useState({ company_name: '', phone: '', contact_name: '', homepage: '', memo: '' });
+  const [addForm, setAddForm] = useState({ company_name: '', phone: '', contact_name: '', homepage: '', lead_source: '', inquiry_content: '', memo: '' });
   const [adding, setAdding] = useState(false);
 
   // Sidebar state
@@ -300,6 +300,8 @@ export default function LeadsPage() {
       phone: row['電話番号'] || row['phone'] || '',
       contact_name: row['担当者名'] || row['contact_name'] || '',
       homepage: row['HP'] || row['homepage'] || row['URL'] || '',
+      lead_source: row['流入経路'] || row['lead_source'] || '',
+      inquiry_content: row['問い合わせ内容'] || row['inquiry_content'] || '',
       status: 'new' as const,
       memo: row['メモ'] || row['memo'] || '',
     }));
@@ -327,11 +329,13 @@ export default function LeadsPage() {
       phone: addForm.phone,
       contact_name: addForm.contact_name || '',
       homepage: addForm.homepage || '',
+      lead_source: addForm.lead_source || '',
+      inquiry_content: addForm.inquiry_content || '',
       status: 'new' as const,
       memo: addForm.memo || '',
     });
     setShowAddModal(false);
-    setAddForm({ company_name: '', phone: '', contact_name: '', homepage: '', memo: '' });
+    setAddForm({ company_name: '', phone: '', contact_name: '', homepage: '', lead_source: '', inquiry_content: '', memo: '' });
     setAdding(false);
     setPage(0);
     loadLeads();
@@ -518,6 +522,8 @@ export default function LeadsPage() {
                       <th className="text-left py-3 px-3 text-sm font-medium text-gray-500">担当者名</th>
                       <th className="text-left py-3 px-3 text-sm font-medium text-gray-500">電話番号</th>
                       <th className="text-left py-3 px-3 text-sm font-medium text-gray-500">HP</th>
+                      <th className="text-left py-3 px-3 text-sm font-medium text-gray-500">流入経路</th>
+                      <th className="text-left py-3 px-3 text-sm font-medium text-gray-500">問い合わせ内容</th>
                       <th className="text-left py-3 px-3 text-sm font-medium text-gray-500">ステータス</th>
                       <th className="text-left py-3 px-3 text-sm font-medium text-gray-500">次回予定</th>
                       <th className="text-left py-3 px-3 text-sm font-medium text-gray-500">担当</th>
@@ -528,7 +534,8 @@ export default function LeadsPage() {
                     {leads.map((lead) => (
                       <tr
                         key={lead.id}
-                        className={`border-b border-gray-100 hover:bg-gray-50 transition-colors ${
+                        onClick={() => handleSelectLead(lead)}
+                        className={`border-b border-gray-100 hover:bg-gray-50 transition-colors cursor-pointer ${
                           selectedLead?.id === lead.id ? 'bg-blue-50 hover:bg-blue-50' : ''
                         }`}
                       >
@@ -593,6 +600,36 @@ export default function LeadsPage() {
                               onClick={(e) => { e.stopPropagation(); startEditCell(lead.id, 'homepage', ''); }}
                             >
                               -
+                            </span>
+                          )}
+                        </td>
+                        {/* Lead source */}
+                        <td className="py-2 px-3 text-sm text-gray-600">
+                          {renderEditableText(lead, 'lead_source', lead.lead_source || '')}
+                        </td>
+                        {/* Inquiry content */}
+                        <td className="py-2 px-3 text-sm text-gray-500 max-w-[150px]">
+                          {isEditing(lead.id, 'inquiry_content') ? (
+                            <input
+                              type="text"
+                              value={editCellValue}
+                              onChange={(e) => setEditCellValue(e.target.value)}
+                              onBlur={() => saveCell(lead.id, 'inquiry_content')}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') saveCell(lead.id, 'inquiry_content');
+                                if (e.key === 'Escape') cancelEditCell();
+                              }}
+                              autoFocus
+                              className="w-full px-1 py-0.5 border border-blue-400 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+                              onClick={(e) => e.stopPropagation()}
+                            />
+                          ) : (
+                            <span
+                              className="cursor-text hover:bg-blue-50 px-1 py-0.5 rounded -mx-1 block truncate"
+                              onClick={(e) => { e.stopPropagation(); startEditCell(lead.id, 'inquiry_content', lead.inquiry_content || ''); }}
+                              title={lead.inquiry_content || ''}
+                            >
+                              {lead.inquiry_content || '-'}
                             </span>
                           )}
                         </td>
@@ -789,6 +826,12 @@ export default function LeadsPage() {
                     {selectedLead.homepage.replace(/^https?:\/\//, '').replace(/\/$/, '')}
                   </a>
                 )}
+                {selectedLead.lead_source && (
+                  <p className="text-xs text-gray-600">流入経路: {selectedLead.lead_source}</p>
+                )}
+                {selectedLead.inquiry_content && (
+                  <p className="text-xs text-gray-600">問い合わせ内容: {selectedLead.inquiry_content}</p>
+                )}
                 {selectedLead.memo && (
                   <p className="text-xs text-gray-500">メモ: {selectedLead.memo}</p>
                 )}
@@ -922,7 +965,7 @@ export default function LeadsPage() {
               <button
                 onClick={() => {
                   setShowAddModal(false);
-                  setAddForm({ company_name: '', phone: '', contact_name: '', homepage: '', memo: '' });
+                  setAddForm({ company_name: '', phone: '', contact_name: '', homepage: '', lead_source: '', inquiry_content: '', memo: '' });
                 }}
                 className="text-gray-400 hover:text-gray-600"
               >
@@ -977,6 +1020,26 @@ export default function LeadsPage() {
                 />
               </div>
               <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">流入経路</label>
+                <input
+                  type="text"
+                  value={addForm.lead_source}
+                  onChange={(e) => setAddForm({ ...addForm, lead_source: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-500 focus:border-transparent"
+                  placeholder="例: Web問い合わせ"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">問い合わせ内容</label>
+                <textarea
+                  value={addForm.inquiry_content}
+                  onChange={(e) => setAddForm({ ...addForm, inquiry_content: e.target.value })}
+                  rows={2}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-500 focus:border-transparent resize-none"
+                  placeholder="問い合わせ内容を入力してください"
+                />
+              </div>
+              <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">メモ</label>
                 <textarea
                   value={addForm.memo}
@@ -991,7 +1054,7 @@ export default function LeadsPage() {
               <button
                 onClick={() => {
                   setShowAddModal(false);
-                  setAddForm({ company_name: '', phone: '', contact_name: '', homepage: '', memo: '' });
+                  setAddForm({ company_name: '', phone: '', contact_name: '', homepage: '', lead_source: '', inquiry_content: '', memo: '' });
                 }}
                 className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800"
               >
@@ -1041,7 +1104,7 @@ export default function LeadsPage() {
             </div>
             <div className="px-6 py-4">
               <p className="text-sm text-gray-600 mb-4">
-                CSVファイルをアップロードしてください。ヘッダー行に「会社名」「電話番号」「担当者名」「HP」「メモ」を含めてください。
+                CSVファイルをアップロードしてください。ヘッダー行に「会社名」「電話番号」「担当者名」「HP」「流入経路」「問い合わせ内容」「メモ」を含めてください。
               </p>
               <input
                 type="file"
