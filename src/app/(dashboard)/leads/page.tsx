@@ -15,6 +15,8 @@ import {
   LEAD_STATUS_COLORS,
   CALL_RESULT_LABELS,
   CALL_RESULT_COLORS,
+  PRIORITY_OPTIONS,
+  PRIORITY_COLORS,
 } from '@/lib/types';
 import Papa from 'papaparse';
 
@@ -967,6 +969,7 @@ export default function LeadsPage() {
                         { key: 'lead_source', label: '流入経路' },
                         { key: 'inquiry_date', label: '問い合わせ日' },
                         { key: 'inquiry_content', label: '問い合わせ内容' },
+                        { key: 'priority', label: '優先度' },
                         { key: 'status', label: 'ステータス' },
                         { key: 'next_activity_date', label: '次回予定' },
                         { key: 'assigned_to', label: '担当' },
@@ -1113,6 +1116,30 @@ export default function LeadsPage() {
                               title={lead.inquiry_content || ''}
                             >
                               {lead.inquiry_content || '-'}
+                            </span>
+                          )}
+                        </td>
+                        {/* Priority */}
+                        <td className="py-2 px-3" onClick={(e) => e.stopPropagation()}>
+                          {isEditing(lead.id, 'priority') ? (
+                            <select
+                              value={editCellValue}
+                              onChange={(e) => { setEditCellValue(e.target.value); }}
+                              onBlur={() => saveCell(lead.id, 'priority')}
+                              autoFocus
+                              className="px-1 py-0.5 border border-blue-400 rounded text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+                            >
+                              <option value="">-</option>
+                              {PRIORITY_OPTIONS.map((p) => (
+                                <option key={p} value={p}>{p}</option>
+                              ))}
+                            </select>
+                          ) : (
+                            <span
+                              className={`inline-block px-2 py-0.5 rounded text-xs font-medium cursor-pointer hover:opacity-80 ${lead.priority ? PRIORITY_COLORS[lead.priority] : 'text-gray-400'}`}
+                              onClick={() => startEditCell(lead.id, 'priority', lead.priority || '')}
+                            >
+                              {lead.priority || '-'}
                             </span>
                           )}
                         </td>

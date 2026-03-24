@@ -6,6 +6,7 @@ export interface Profile {
 }
 
 export type LeadStatus = 'new' | 'unreviewed' | 'calling' | 'contacted' | 'appointment' | 'excluded' | 'dnc' | 'duplicate';
+export type Priority = 'A' | 'B' | 'C' | '';
 
 export interface Lead {
   id: string;
@@ -19,6 +20,7 @@ export interface Lead {
   inquiry_content: string;
   next_activity_date: string | null;
   status: LeadStatus;
+  priority: Priority;
   memo: string;
   assigned_to: string | null;
   industry: string;
@@ -130,3 +132,10 @@ export const CALL_RESULT_COLORS: Record<CallResult, string> = {
 
 export const EMAIL_RESULT_LABEL = 'メール送付';
 export const EMAIL_RESULT_COLOR = 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200';
+
+export const PRIORITY_OPTIONS = ['A', 'B', 'C'] as const;
+export const PRIORITY_COLORS: Record<string, string> = {
+  A: 'bg-red-100 text-red-800',
+  B: 'bg-yellow-100 text-yellow-800',
+  C: 'bg-gray-100 text-gray-800',
+};
