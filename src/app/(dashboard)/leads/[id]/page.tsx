@@ -14,12 +14,13 @@ import {
   OVERSEAS_INTEREST_OPTIONS,
 } from '@/lib/types';
 
-type EmailTemplateType = 'initial' | 'followup' | 'appointment';
+type EmailTemplateType = 'initial' | 'followup' | 'appointment' | 'reapproach';
 
 const EMAIL_TEMPLATE_LABELS: Record<EmailTemplateType, string> = {
-  initial: '初回アプローチ',
-  followup: 'フォローアップ',
-  appointment: 'アポイント依頼',
+  initial: '初回',
+  followup: 'フォロー',
+  appointment: 'アポ依頼',
+  reapproach: '再アプローチ',
 };
 
 export default function LeadDetailPage({

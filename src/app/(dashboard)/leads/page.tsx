@@ -52,7 +52,7 @@ export default function LeadsPage() {
   const [sidebarLoading, setSidebarLoading] = useState(false);
 
   // AI Email state
-  const [aiEmailTemplateType, setAiEmailTemplateType] = useState<'initial' | 'followup' | 'appointment'>('initial');
+  const [aiEmailTemplateType, setAiEmailTemplateType] = useState<'initial' | 'followup' | 'appointment' | 'reapproach'>('initial');
   const [aiGeneratedSubject, setAiGeneratedSubject] = useState('');
   const [aiGeneratedBody, setAiGeneratedBody] = useState('');
   const [aiGenerating, setAiGenerating] = useState(false);
@@ -1307,18 +1307,18 @@ export default function LeadsPage() {
                     AI メール生成
                   </h3>
                 </div>
-                <div className="flex bg-gray-100 rounded-lg overflow-hidden mb-2">
-                  {(['initial', 'followup', 'appointment'] as const).map((type) => (
+                <div className="grid grid-cols-2 gap-1 bg-gray-100 rounded-lg p-1 mb-2">
+                  {([['initial', '初回'], ['followup', 'フォロー'], ['appointment', 'アポ依頼'], ['reapproach', '再アプローチ']] as const).map(([type, label]) => (
                     <button
                       key={type}
                       onClick={() => setAiEmailTemplateType(type)}
-                      className={`flex-1 px-2 py-1 text-[10px] font-medium transition-colors ${
+                      className={`px-2 py-1.5 text-[10px] font-medium rounded transition-colors ${
                         aiEmailTemplateType === type
-                          ? 'bg-slate-800 text-white'
+                          ? 'bg-slate-800 text-white shadow-sm'
                           : 'text-gray-600 hover:bg-gray-200'
                       }`}
                     >
-                      {type === 'initial' ? '初回アプローチ' : type === 'followup' ? 'フォローアップ' : 'アポイント依頼'}
+                      {label}
                     </button>
                   ))}
                 </div>
