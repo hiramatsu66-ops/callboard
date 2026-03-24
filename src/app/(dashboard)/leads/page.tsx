@@ -341,7 +341,7 @@ function LeadsPage() {
         await fetch('/api/hubspot-check', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ lead_id: lead.id, company_name: lead.company_name }),
+          body: JSON.stringify({ lead_id: lead.id, company_name: lead.company_name, homepage: lead.homepage }),
         });
       } catch { /* skip */ }
       done++;
@@ -362,7 +362,7 @@ function LeadsPage() {
       const res = await fetch('/api/hubspot-check', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lead_id: selectedLead.id, company_name: selectedLead.company_name }),
+        body: JSON.stringify({ lead_id: selectedLead.id, company_name: selectedLead.company_name, homepage: selectedLead.homepage }),
       });
       const data = await res.json();
       if (res.ok) {
