@@ -76,6 +76,8 @@ function LeadsPage() {
   const [aiCopied, setAiCopied] = useState(false);
   const [aiSending, setAiSending] = useState(false);
   const [aiSent, setAiSent] = useState(false);
+  const [classifying, setClassifying] = useState(false);
+  const [classifyReason, setClassifyReason] = useState('');
 
   // Gmail state
   const [gmailConnected, setGmailConnected] = useState(false);
@@ -273,6 +275,47 @@ function LeadsPage() {
     }
     loadSidebarData(updatedLead || selectedLead);
     loadLeads();
+  };
+
+  const handleClassifyPriority = async () => {
+    if (!selectedLead) return;
+    setClassifying(true);
+    setClassifyReason('');
+
+    try {
+      const res = await fetch('/api/classify-priority', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          lead: {
+            company_name: selectedLead.company_name,
+            inquiry_content: selectedLead.inquiry_content,
+            lead_source: selectedLead.lead_source,
+            homepage: selectedLead.homepage,
+          },
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        setClassifyReason(data.error || '判定に失敗しました');
+        return;
+      }
+
+      // Update DB
+      await supabase
+        .from('leads')
+        .update({ priority: data.priority })
+        .eq('id', selectedLead.id);
+
+      setSelectedLead({ ...selectedLead, priority: data.priority });
+      setClassifyReason(`${data.priority} - ${data.reason}`);
+      loadLeads();
+    } catch {
+      setClassifyReason('通信エラーが発生しました');
+    } finally {
+      setClassifying(false);
+    }
   };
 
   const handleAiGenerateEmail = async () => {
@@ -1475,6 +1518,43 @@ function LeadsPage() {
                 >
                   {CALL_RESULT_LABELS.email_sent}
                 </button>
+              </div>
+
+              {/* AI Priority Classification */}
+              <div className="px-4 py-3 border-b border-gray-100">
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-xs font-semibold text-gray-700 flex items-center gap-1">
+                    <svg className="w-3.5 h-3.5 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                    </svg>
+                    AI 優先度判定
+                  </h3>
+                  {selectedLead.priority && (
+                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${PRIORITY_COLORS[selectedLead.priority] || 'text-gray-400'}`}>
+                      現在: {selectedLead.priority}
+                    </span>
+                  )}
+                </div>
+                <button
+                  onClick={handleClassifyPriority}
+                  disabled={classifying}
+                  className="w-full py-2 bg-gradient-to-r from-violet-500 to-purple-500 text-white text-xs font-medium rounded-lg hover:from-violet-600 hover:to-purple-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {classifying ? (
+                    <span className="flex items-center justify-center gap-1">
+                      <svg className="animate-spin w-3.5 h-3.5" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                      HP取得・判定中...
+                    </span>
+                  ) : (
+                    'HPと問い合わせ内容から優先度を判定'
+                  )}
+                </button>
+                {classifyReason && (
+                  <p className="mt-2 text-[10px] text-gray-600 bg-gray-50 rounded p-2">{classifyReason}</p>
+                )}
               </div>
 
               {/* AI Email Generation */}
