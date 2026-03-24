@@ -31,7 +31,8 @@ export interface Lead {
   profiles?: Profile;
 }
 
-export type CallResult = 'no_answer' | 'reception' | 'connected' | 'appointment' | 'rejected' | 'invalid';
+export type CallResult = 'no_answer' | 'reception' | 'connected' | 'appointment' | 'rejected' | 'invalid' | 'email_sent';
+export type ActivityType = 'call' | 'email';
 
 export interface CallLog {
   id: string;
@@ -40,6 +41,7 @@ export interface CallLog {
   called_at: string;
   result: CallResult;
   memo: string;
+  activity_type: ActivityType;
   created_at: string;
   // Joined fields
   profiles?: Profile;
@@ -100,6 +102,7 @@ export const CALL_RESULT_LABELS: Record<CallResult, string> = {
   appointment: 'アポ獲得',
   rejected: '断り',
   invalid: '番号無効',
+  email_sent: 'メール送付',
 };
 
 export const INDUSTRY_OPTIONS = [
@@ -122,4 +125,8 @@ export const CALL_RESULT_COLORS: Record<CallResult, string> = {
   appointment: 'bg-green-100 text-green-700 hover:bg-green-200',
   rejected: 'bg-red-100 text-red-700 hover:bg-red-200',
   invalid: 'bg-slate-100 text-slate-700 hover:bg-slate-200',
+  email_sent: 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200',
 };
+
+export const EMAIL_RESULT_LABEL = 'メール送付';
+export const EMAIL_RESULT_COLOR = 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200';

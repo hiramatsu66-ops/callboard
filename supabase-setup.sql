@@ -159,6 +159,15 @@ alter table public.leads add column if not exists overseas_interest text default
 alter table public.leads add column if not exists target_countries text default '';
 
 -- ============================================
+-- 5c. ADD ACTIVITY TYPE TO CALL_LOGS
+-- Run this if call_logs table already exists
+-- ============================================
+alter table public.call_logs add column if not exists activity_type text default 'call' check (activity_type in ('call', 'email'));
+-- Allow 'email_sent' as a result for email activities
+alter table public.call_logs drop constraint if exists call_logs_result_check;
+alter table public.call_logs add constraint call_logs_result_check check (result in ('no_answer','reception','connected','appointment','rejected','invalid','email_sent'));
+
+-- ============================================
 -- 6. HELPER: auto-update updated_at
 -- ============================================
 create or replace function public.update_updated_at()

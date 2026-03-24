@@ -185,11 +185,13 @@ export default function LeadsPage() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
+    const isEmail = result === 'email_sent';
     await supabase.from('call_logs').insert({
       lead_id: selectedLead.id,
       caller_id: user.id,
       result,
       memo: activityMemo,
+      activity_type: isEmail ? 'email' : 'call',
     });
 
     let newStatus: LeadStatus = selectedLead.status;
@@ -197,6 +199,7 @@ export default function LeadsPage() {
     else if (result === 'connected') newStatus = 'contacted';
     else if (result === 'invalid') newStatus = 'excluded';
     else if (result === 'rejected') newStatus = 'dnc';
+    else if (isEmail && newStatus === 'new') newStatus = 'calling';
     else if (newStatus === 'new') newStatus = 'calling';
 
     await supabase
@@ -1284,8 +1287,9 @@ export default function LeadsPage() {
                   rows={2}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-500 resize-none mb-2"
                 />
+                <p className="text-[10px] text-gray-400 mb-1">架電</p>
                 <div className="grid grid-cols-3 gap-1.5">
-                  {(Object.keys(CALL_RESULT_LABELS) as CallResult[]).map((result) => (
+                  {(Object.keys(CALL_RESULT_LABELS) as CallResult[]).filter((r) => r !== 'email_sent').map((result) => (
                     <button
                       key={result}
                       onClick={() => handleRecordActivity(result)}
@@ -1295,6 +1299,13 @@ export default function LeadsPage() {
                     </button>
                   ))}
                 </div>
+                <p className="text-[10px] text-gray-400 mb-1 mt-2">メール</p>
+                <button
+                  onClick={() => handleRecordActivity('email_sent')}
+                  className={`w-full py-2 px-1 rounded-lg text-xs font-medium transition-colors ${CALL_RESULT_COLORS.email_sent}`}
+                >
+                  {CALL_RESULT_LABELS.email_sent}
+                </button>
               </div>
 
               {/* AI Email Generation */}
@@ -1393,85 +1404,109 @@ export default function LeadsPage() {
                 )}
               </div>
 
-              {/* Activity History */}
+              {/* Activity History - Calls */}
+              <div className="px-4 py-3 border-b border-gray-100">
+                <h3 className="text-xs font-semibold text-gray-700 mb-2">架電履歴</h3>
+                {(() => {
+                  const callLogs = sidebarCallLogs.filter((l) => l.activity_type !== 'email');
+                  return callLogs.length === 0 ? (
+                    <p className="text-xs text-gray-400 text-center py-3">まだ架電履歴がありません</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {callLogs.map((log) => (
+                        <div key={log.id} className="border-l-2 border-gray-200 pl-3 py-0.5">
+                          {editingLogId === log.id ? (
+                            <div className="space-y-2">
+                              <select
+                                value={editLogResult}
+                                onChange={(e) => setEditLogResult(e.target.value as CallResult)}
+                                className="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-1 focus:ring-slate-500 bg-white"
+                              >
+                                {(Object.keys(CALL_RESULT_LABELS) as CallResult[]).filter((r) => r !== 'email_sent').map((r) => (
+                                  <option key={r} value={r}>{CALL_RESULT_LABELS[r]}</option>
+                                ))}
+                              </select>
+                              <textarea
+                                value={editLogMemo}
+                                onChange={(e) => setEditLogMemo(e.target.value)}
+                                rows={2}
+                                className="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-1 focus:ring-slate-500 resize-none"
+                                placeholder="メモ"
+                              />
+                              <div className="flex gap-1">
+                                <button onClick={handleSaveEditLog} className="px-2 py-1 bg-slate-800 text-white text-[10px] rounded hover:bg-slate-700">保存</button>
+                                <button onClick={() => setEditingLogId(null)} className="px-2 py-1 text-[10px] text-gray-500 hover:text-gray-700">キャンセル</button>
+                              </div>
+                            </div>
+                          ) : (
+                            <>
+                              <div className="flex items-center gap-2">
+                                <span className={`inline-block px-1.5 py-0.5 rounded-full text-[10px] font-medium ${CALL_RESULT_COLORS[log.result].replace(/hover:\S+/g, '')}`}>
+                                  {CALL_RESULT_LABELS[log.result]}
+                                </span>
+                                <span className="text-[10px] text-gray-400">
+                                  {new Date(log.called_at).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                </span>
+                                <span className="flex-1" />
+                                <button onClick={() => handleStartEditLog(log)} className="text-[10px] text-gray-400 hover:text-blue-600">編集</button>
+                                <button onClick={() => handleDeleteLog(log.id)} className="text-[10px] text-gray-400 hover:text-red-600">削除</button>
+                              </div>
+                              {log.memo && <p className="text-xs text-gray-600 mt-0.5">{log.memo}</p>}
+                            </>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* Activity History - Emails */}
               <div className="px-4 py-3">
-                <h3 className="text-xs font-semibold text-gray-700 mb-2">活動履歴</h3>
-                {sidebarCallLogs.length === 0 ? (
-                  <p className="text-xs text-gray-400 text-center py-4">まだ活動履歴がありません</p>
-                ) : (
-                  <div className="space-y-3">
-                    {sidebarCallLogs.map((log) => (
-                      <div key={log.id} className="border-l-2 border-gray-200 pl-3 py-0.5">
-                        {editingLogId === log.id ? (
-                          <div className="space-y-2">
-                            <select
-                              value={editLogResult}
-                              onChange={(e) => setEditLogResult(e.target.value as CallResult)}
-                              className="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-1 focus:ring-slate-500 bg-white"
-                            >
-                              {(Object.keys(CALL_RESULT_LABELS) as CallResult[]).map((r) => (
-                                <option key={r} value={r}>{CALL_RESULT_LABELS[r]}</option>
-                              ))}
-                            </select>
-                            <textarea
-                              value={editLogMemo}
-                              onChange={(e) => setEditLogMemo(e.target.value)}
-                              rows={2}
-                              className="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-1 focus:ring-slate-500 resize-none"
-                              placeholder="メモ"
-                            />
-                            <div className="flex gap-1">
-                              <button
-                                onClick={handleSaveEditLog}
-                                className="px-2 py-1 bg-slate-800 text-white text-[10px] rounded hover:bg-slate-700"
-                              >
-                                保存
-                              </button>
-                              <button
-                                onClick={() => setEditingLogId(null)}
-                                className="px-2 py-1 text-[10px] text-gray-500 hover:text-gray-700"
-                              >
-                                キャンセル
-                              </button>
+                <h3 className="text-xs font-semibold text-gray-700 mb-2">メール履歴</h3>
+                {(() => {
+                  const emailLogs = sidebarCallLogs.filter((l) => l.activity_type === 'email');
+                  return emailLogs.length === 0 ? (
+                    <p className="text-xs text-gray-400 text-center py-3">まだメール履歴がありません</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {emailLogs.map((log) => (
+                        <div key={log.id} className="border-l-2 border-indigo-200 pl-3 py-0.5">
+                          {editingLogId === log.id ? (
+                            <div className="space-y-2">
+                              <textarea
+                                value={editLogMemo}
+                                onChange={(e) => setEditLogMemo(e.target.value)}
+                                rows={2}
+                                className="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-1 focus:ring-slate-500 resize-none"
+                                placeholder="メモ"
+                              />
+                              <div className="flex gap-1">
+                                <button onClick={handleSaveEditLog} className="px-2 py-1 bg-slate-800 text-white text-[10px] rounded hover:bg-slate-700">保存</button>
+                                <button onClick={() => setEditingLogId(null)} className="px-2 py-1 text-[10px] text-gray-500 hover:text-gray-700">キャンセル</button>
+                              </div>
                             </div>
-                          </div>
-                        ) : (
-                          <>
-                            <div className="flex items-center gap-2">
-                              <span className={`inline-block px-1.5 py-0.5 rounded-full text-[10px] font-medium ${CALL_RESULT_COLORS[log.result].replace(/hover:\S+/g, '')}`}>
-                                {CALL_RESULT_LABELS[log.result]}
-                              </span>
-                              <span className="text-[10px] text-gray-400">
-                                {new Date(log.called_at).toLocaleString('ja-JP', {
-                                  month: 'numeric',
-                                  day: 'numeric',
-                                  hour: '2-digit',
-                                  minute: '2-digit',
-                                })}
-                              </span>
-                              <span className="flex-1" />
-                              <button
-                                onClick={() => handleStartEditLog(log)}
-                                className="text-[10px] text-gray-400 hover:text-blue-600"
-                              >
-                                編集
-                              </button>
-                              <button
-                                onClick={() => handleDeleteLog(log.id)}
-                                className="text-[10px] text-gray-400 hover:text-red-600"
-                              >
-                                削除
-                              </button>
-                            </div>
-                            {log.memo && (
-                              <p className="text-xs text-gray-600 mt-0.5">{log.memo}</p>
-                            )}
-                          </>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
+                          ) : (
+                            <>
+                              <div className="flex items-center gap-2">
+                                <span className="inline-block px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-indigo-100 text-indigo-700">
+                                  メール送付
+                                </span>
+                                <span className="text-[10px] text-gray-400">
+                                  {new Date(log.called_at).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                </span>
+                                <span className="flex-1" />
+                                <button onClick={() => handleStartEditLog(log)} className="text-[10px] text-gray-400 hover:text-blue-600">編集</button>
+                                <button onClick={() => handleDeleteLog(log.id)} className="text-[10px] text-gray-400 hover:text-red-600">削除</button>
+                              </div>
+                              {log.memo && <p className="text-xs text-gray-600 mt-0.5">{log.memo}</p>}
+                            </>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           )}
