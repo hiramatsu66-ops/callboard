@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase';
+import { createAdminClient } from '@/lib/supabase';
 import { getOAuth2Client } from '@/lib/gmail';
 import { google } from 'googleapis';
 
@@ -20,7 +20,7 @@ export async function GET(request: NextRequest) {
     const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
     const { data: userInfo } = await oauth2.userinfo.get();
 
-    const supabase = createClient();
+    const supabase = createAdminClient();
     const { error } = await supabase.from('gmail_tokens').upsert({
       user_id: state,
       email: userInfo.email || '',

@@ -11,3 +11,13 @@ export function createClient() {
   }
   return client;
 }
+
+let adminClient: SupabaseClient | null = null;
+
+export function createAdminClient() {
+  if (!adminClient) {
+    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+    adminClient = createSupabaseClient(supabaseUrl, serviceRoleKey);
+  }
+  return adminClient;
+}

@@ -1,18 +1,18 @@
-import { NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase';
+import { NextRequest, NextResponse } from 'next/server';
+import { createAdminClient } from '@/lib/supabase';
 
-export async function GET() {
-  const supabase = createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+export async function GET(request: NextRequest) {
+  const userId = request.nextUrl.searchParams.get('user_id');
 
-  if (!user) {
+  if (!userId) {
     return NextResponse.json({ connected: false });
   }
 
+  const supabase = createAdminClient();
   const { data } = await supabase
     .from('gmail_tokens')
     .select('email')
-    .eq('user_id', user.id)
+    .eq('user_id', userId)
     .single();
 
   return NextResponse.json({

@@ -93,13 +93,16 @@ export default function LeadsPage() {
 
   // Load Gmail connection status
   useEffect(() => {
-    fetch('/api/gmail/status')
-      .then((res) => res.json())
-      .then((data) => {
-        setGmailConnected(data.connected);
-        setGmailEmail(data.email || '');
-      })
-      .catch(() => {});
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (!user) return;
+      fetch(`/api/gmail/status?user_id=${user.id}`)
+        .then((res) => res.json())
+        .then((data) => {
+          setGmailConnected(data.connected);
+          setGmailEmail(data.email || '');
+        })
+        .catch(() => {});
+    });
   }, []);
 
   const loadLeads = useCallback(async () => {
@@ -295,6 +298,9 @@ export default function LeadsPage() {
     setAiEmailError('');
 
     try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) { setAiEmailError('ログインしてください'); setAiSending(false); return; }
+
       const res = await fetch('/api/gmail/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -302,6 +308,7 @@ export default function LeadsPage() {
           to: selectedLead.email,
           subject: aiGeneratedSubject,
           body: aiGeneratedBody,
+          user_id: user.id,
         }),
       });
 
@@ -318,17 +325,14 @@ export default function LeadsPage() {
       setTimeout(() => setAiSent(false), 3000);
 
       // Auto-record email activity
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        await supabase.from('call_logs').insert({
+      await supabase.from('call_logs').insert({
           lead_id: selectedLead.id,
           caller_id: user.id,
           result: 'email_sent',
           memo: `件名: ${aiGeneratedSubject}`,
           activity_type: 'email',
-        });
-        loadSidebarData(selectedLead);
-      }
+      });
+      loadSidebarData(selectedLead);
     } catch {
       setAiEmailError('通信エラーが発生しました');
     } finally {
@@ -1469,12 +1473,15 @@ export default function LeadsPage() {
                         {aiSending ? '送信中...' : aiSent ? '送信しました!' : `Gmailで送信（${gmailEmail}）`}
                       </button>
                     ) : selectedLead.email && !gmailConnected ? (
-                      <a
-                        href="/api/gmail/auth"
-                        className="block w-full py-1.5 text-center bg-blue-600 text-white text-[10px] font-medium rounded-lg hover:bg-blue-700 transition-colors"
+                      <button
+                        onClick={async () => {
+                          const { data: { user } } = await supabase.auth.getUser();
+                          if (user) window.location.href = `/api/gmail/auth?user_id=${user.id}`;
+                        }}
+                        className="w-full py-1.5 text-center bg-blue-600 text-white text-[10px] font-medium rounded-lg hover:bg-blue-700 transition-colors"
                       >
                         Gmail連携して送信
-                      </a>
+                      </button>
                     ) : null}
                   </div>
                 )}

@@ -1,27 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase';
+import { createAdminClient } from '@/lib/supabase';
 import { getOAuth2Client, buildRawEmail } from '@/lib/gmail';
 import { google } from 'googleapis';
 
 export async function POST(request: NextRequest) {
-  const supabase = createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const { to, subject, body, user_id } = await request.json();
 
-  if (!user) {
+  if (!user_id) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
-
-  const { to, subject, body } = await request.json();
 
   if (!to || !subject || !body) {
     return NextResponse.json({ error: '宛先、件名、本文は必須です' }, { status: 400 });
   }
 
+  const supabase = createAdminClient();
+
   // Get stored tokens
   const { data: tokenData } = await supabase
     .from('gmail_tokens')
     .select('*')
-    .eq('user_id', user.id)
+    .eq('user_id', user_id)
     .single();
 
   if (!tokenData) {
@@ -45,7 +44,7 @@ export async function POST(request: NextRequest) {
         await supabase
           .from('gmail_tokens')
           .update(updateData)
-          .eq('user_id', user.id);
+          .eq('user_id', user_id);
       }
     });
 
@@ -62,9 +61,8 @@ export async function POST(request: NextRequest) {
     console.error('Gmail send error:', error);
     const message = error instanceof Error ? error.message : 'Unknown error';
 
-    // Token expired/revoked
     if (message.includes('invalid_grant') || message.includes('Token has been expired or revoked')) {
-      await supabase.from('gmail_tokens').delete().eq('user_id', user.id);
+      await supabase.from('gmail_tokens').delete().eq('user_id', user_id);
       return NextResponse.json({ error: 'Gmail連携の有効期限が切れました。再連携してください。', reauth: true }, { status: 401 });
     }
 
