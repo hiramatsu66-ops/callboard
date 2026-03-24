@@ -58,6 +58,12 @@ export default function LeadsPage() {
   const [aiGenerating, setAiGenerating] = useState(false);
   const [aiEmailError, setAiEmailError] = useState('');
   const [aiCopied, setAiCopied] = useState(false);
+  const [aiSending, setAiSending] = useState(false);
+  const [aiSent, setAiSent] = useState(false);
+
+  // Gmail state
+  const [gmailConnected, setGmailConnected] = useState(false);
+  const [gmailEmail, setGmailEmail] = useState('');
 
   // Edit call log state
   const [editingLogId, setEditingLogId] = useState<string | null>(null);
@@ -84,6 +90,17 @@ export default function LeadsPage() {
     }, 300);
     return () => clearTimeout(timer);
   }, [search]);
+
+  // Load Gmail connection status
+  useEffect(() => {
+    fetch('/api/gmail/status')
+      .then((res) => res.json())
+      .then((data) => {
+        setGmailConnected(data.connected);
+        setGmailEmail(data.email || '');
+      })
+      .catch(() => {});
+  }, []);
 
   const loadLeads = useCallback(async () => {
     try {
@@ -270,6 +287,53 @@ export default function LeadsPage() {
     await navigator.clipboard.writeText(fullEmail);
     setAiCopied(true);
     setTimeout(() => setAiCopied(false), 2000);
+  };
+
+  const handleAiSendEmail = async () => {
+    if (!selectedLead || !selectedLead.email || !aiGeneratedSubject || !aiGeneratedBody) return;
+    setAiSending(true);
+    setAiEmailError('');
+
+    try {
+      const res = await fetch('/api/gmail/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to: selectedLead.email,
+          subject: aiGeneratedSubject,
+          body: aiGeneratedBody,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        if (data.reauth) {
+          setGmailConnected(false);
+        }
+        setAiEmailError(data.error || '送信に失敗しました');
+        return;
+      }
+
+      setAiSent(true);
+      setTimeout(() => setAiSent(false), 3000);
+
+      // Auto-record email activity
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        await supabase.from('call_logs').insert({
+          lead_id: selectedLead.id,
+          caller_id: user.id,
+          result: 'email_sent',
+          memo: `件名: ${aiGeneratedSubject}`,
+          activity_type: 'email',
+        });
+        loadSidebarData(selectedLead);
+      }
+    } catch {
+      setAiEmailError('通信エラーが発生しました');
+    } finally {
+      setAiSending(false);
+    }
   };
 
   const handleUpdateNextActivityDate = async (date: string) => {
@@ -1392,14 +1456,26 @@ export default function LeadsPage() {
                         再生成
                       </button>
                     </div>
-                    {selectedLead.email && (
+                    {selectedLead.email && gmailConnected ? (
+                      <button
+                        onClick={handleAiSendEmail}
+                        disabled={aiSending || aiSent}
+                        className={`w-full py-1.5 text-[10px] font-medium rounded-lg transition-colors ${
+                          aiSent
+                            ? 'bg-green-600 text-white'
+                            : 'bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50'
+                        }`}
+                      >
+                        {aiSending ? '送信中...' : aiSent ? '送信しました!' : `Gmailで送信（${gmailEmail}）`}
+                      </button>
+                    ) : selectedLead.email && !gmailConnected ? (
                       <a
-                        href={`mailto:${selectedLead.email}?subject=${encodeURIComponent(aiGeneratedSubject)}&body=${encodeURIComponent(aiGeneratedBody)}`}
+                        href="/api/gmail/auth"
                         className="block w-full py-1.5 text-center bg-blue-600 text-white text-[10px] font-medium rounded-lg hover:bg-blue-700 transition-colors"
                       >
-                        メールアプリで開く
+                        Gmail連携して送信
                       </a>
-                    )}
+                    ) : null}
                   </div>
                 )}
               </div>

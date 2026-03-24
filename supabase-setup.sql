@@ -168,6 +168,26 @@ alter table public.call_logs drop constraint if exists call_logs_result_check;
 alter table public.call_logs add constraint call_logs_result_check check (result in ('no_answer','reception','connected','appointment','rejected','invalid','email_sent'));
 
 -- ============================================
+-- 5d. GMAIL TOKENS TABLE
+-- Stores OAuth refresh tokens for Gmail API
+-- ============================================
+create table if not exists public.gmail_tokens (
+  user_id uuid references public.profiles(id) on delete cascade primary key,
+  email text not null,
+  access_token text not null,
+  refresh_token text not null,
+  expiry_date bigint,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+
+alter table public.gmail_tokens enable row level security;
+create policy "Users can read own gmail_tokens" on public.gmail_tokens for select using (auth.uid() = user_id);
+create policy "Users can insert own gmail_tokens" on public.gmail_tokens for insert with check (auth.uid() = user_id);
+create policy "Users can update own gmail_tokens" on public.gmail_tokens for update using (auth.uid() = user_id);
+create policy "Users can delete own gmail_tokens" on public.gmail_tokens for delete using (auth.uid() = user_id);
+
+-- ============================================
 -- 6. HELPER: auto-update updated_at
 -- ============================================
 create or replace function public.update_updated_at()
