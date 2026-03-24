@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback, useMemo, memo, Suspense } from 'react';
-import { useSearchParams, useRouter } from 'next/navigation';
+import { useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase';
 import type {
   Lead,
@@ -34,7 +34,6 @@ export default function LeadsPageWrapper() {
 
 function LeadsPage() {
   const searchParams = useSearchParams();
-  const router = useRouter();
 
   const [leads, setLeads] = useState<Lead[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
@@ -119,9 +118,9 @@ function LeadsPage() {
     if (sortAscending) params.set('asc', '1');
     if (page > 0) params.set('page', String(page));
     const qs = params.toString();
-    const newUrl = qs ? `?${qs}` : '/leads';
-    router.replace(newUrl, { scroll: false });
-  }, [debouncedSearch, statusFilter, excludedStatuses, assignedFilter, sortColumn, sortAscending, page, router]);
+    const newUrl = qs ? `/leads?${qs}` : '/leads';
+    window.history.replaceState(null, '', newUrl);
+  }, [debouncedSearch, statusFilter, excludedStatuses, assignedFilter, sortColumn, sortAscending, page]);
 
   // Load Gmail connection status
   useEffect(() => {
