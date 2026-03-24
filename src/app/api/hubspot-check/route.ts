@@ -3,10 +3,33 @@ import { createAdminClient } from '@/lib/supabase';
 
 const HUBSPOT_API = 'https://api.hubapi.com';
 
+// 「関心喚起」以降のステージ（関心喚起を含む）
+// 事業開発パイプライン
+// コンシェルジュ等の別パイプライン
+const QUALIFIED_STAGES = new Set([
+  // 事業開発パイプライン (688416257)
+  '1008569742', // 関心喚起
+  '1008569743', // 課題の合意
+  '1008569744', // D納得獲得
+  '1008569745', // C納得獲得
+  '1008569746', // B購買環境整備
+  '1009228166', // A申込書送付
+  '1009228167', // 受注
+  // もう1つのパイプライン
+  '1016011420', // 関心喚起
+  '1016011421', // 課題の合意
+  '1016011422', // D納得獲得（商談化）
+  '1016011423', // C納得獲得
+  '1016107028', // B購買環境整備
+  '1016107029', // A申込書送付
+  '1016011424', // 受注
+]);
+
 interface DealInfo {
   exists: boolean;
   ownerName: string;
   createdAt: string | null;
+  dealStage: string;
 }
 
 async function searchCompanyIds(
@@ -44,11 +67,10 @@ function extractDomain(url: string): string {
   }
 }
 
-async function getLatestDealForCompany(
+async function getDealsForCompany(
   companyId: string,
   token: string
-): Promise<{ dealname: string; hubspot_owner_id: string; createdate: string } | null> {
-  // Use CRM Search with company association filter
+): Promise<{ dealname: string; hubspot_owner_id: string; createdate: string; dealstage: string }[]> {
   const res = await fetch(`${HUBSPOT_API}/crm/v3/objects/deals/search`, {
     method: 'POST',
     headers: {
@@ -63,26 +85,21 @@ async function getLatestDealForCompany(
           value: companyId,
         }],
       }],
-      properties: ['dealname', 'hubspot_owner_id', 'createdate'],
+      properties: ['dealname', 'hubspot_owner_id', 'createdate', 'dealstage'],
       sorts: [{ propertyName: 'createdate', direction: 'DESCENDING' }],
-      limit: 1,
+      limit: 20,
     }),
   });
 
-  if (!res.ok) {
-    console.error('Deal search failed:', res.status, await res.text().catch(() => ''));
-    return null;
-  }
+  if (!res.ok) return [];
   const data = await res.json();
-  if (!data.results || data.results.length === 0) return null;
-  return data.results[0].properties;
+  return (data.results || []).map((r: { properties: Record<string, string> }) => r.properties);
 }
 
 async function buildOwnerMap(token: string): Promise<Map<string, string>> {
   const map = new Map<string, string>();
   let after: string | undefined;
 
-  // Paginate through all owners
   for (let i = 0; i < 10; i++) {
     const url = new URL(`${HUBSPOT_API}/crm/v3/owners`);
     url.searchParams.set('limit', '100');
@@ -91,10 +108,7 @@ async function buildOwnerMap(token: string): Promise<Map<string, string>> {
     const res = await fetch(url.toString(), {
       headers: { Authorization: `Bearer ${token}` },
     });
-    if (!res.ok) {
-      console.error('Owners API failed:', res.status);
-      break;
-    }
+    if (!res.ok) break;
     const data = await res.json();
     for (const owner of data.results || []) {
       const last = owner.lastName || '';
@@ -115,12 +129,10 @@ async function checkCompanyDeal(
   token: string,
   ownerMap: Map<string, string>
 ): Promise<DealInfo> {
-  const noDeal: DealInfo = { exists: false, ownerName: '', createdAt: null };
+  const noDeal: DealInfo = { exists: false, ownerName: '', createdAt: null, dealStage: '' };
 
-  // Search by company name
   let companyIds = await searchCompanyIds(companyName, token);
 
-  // Fallback: search by domain
   if (companyIds.length === 0) {
     const domain = extractDomain(homepage);
     if (domain) {
@@ -130,15 +142,17 @@ async function checkCompanyDeal(
 
   if (companyIds.length === 0) return noDeal;
 
-  // Get latest deal from matched companies
+  // Check all deals for qualified stage
   for (const companyId of companyIds) {
-    const deal = await getLatestDealForCompany(companyId, token);
-    if (deal) {
-      const ownerName = ownerMap.get(deal.hubspot_owner_id) || '';
+    const deals = await getDealsForCompany(companyId, token);
+    // Find the latest deal that has passed 関心喚起
+    const qualifiedDeal = deals.find(d => QUALIFIED_STAGES.has(d.dealstage));
+    if (qualifiedDeal) {
       return {
         exists: true,
-        ownerName,
-        createdAt: deal.createdate || null,
+        ownerName: ownerMap.get(qualifiedDeal.hubspot_owner_id) || '',
+        createdAt: qualifiedDeal.createdate || null,
+        dealStage: qualifiedDeal.dealstage,
       };
     }
   }
