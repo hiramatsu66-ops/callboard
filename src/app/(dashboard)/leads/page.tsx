@@ -366,7 +366,7 @@ function LeadsPage() {
       });
       const data = await res.json();
       if (res.ok) {
-        setSelectedLead({ ...selectedLead, hs_deal_exists: data.deal_exists, hs_checked_at: data.checked_at });
+        setSelectedLead({ ...selectedLead, hs_deal_exists: data.deal_exists, hs_checked_at: data.checked_at, hs_deal_owner: data.deal_owner || '', hs_deal_created_at: data.deal_created_at || null });
         loadLeads();
       }
     } catch { /* skip */ }
@@ -1154,6 +1154,8 @@ function LeadsPage() {
                         { key: 'inquiry_date', label: '問い合わせ日' },
                         { key: 'inquiry_content', label: '問い合わせ内容' },
                         { key: 'hs_deal_exists', label: '商談' },
+                        { key: 'hs_deal_owner', label: '商談担当' },
+                        { key: 'hs_deal_created_at', label: '取引作成日' },
                         { key: 'priority', label: '優先度' },
                         { key: 'status', label: 'ステータス' },
                         { key: 'next_activity_date', label: '次回予定' },
@@ -1313,6 +1315,16 @@ function LeadsPage() {
                           ) : (
                             <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-700">未商談</span>
                           )}
+                        </td>
+                        {/* HubSpot Deal Owner */}
+                        <td className="py-2 px-3 text-xs text-gray-700 whitespace-nowrap">
+                          {lead.hs_deal_exists ? (lead.hs_deal_owner || '-') : '-'}
+                        </td>
+                        {/* HubSpot Deal Created At */}
+                        <td className="py-2 px-3 text-xs text-gray-700 whitespace-nowrap">
+                          {lead.hs_deal_exists && lead.hs_deal_created_at
+                            ? new Date(lead.hs_deal_created_at).toLocaleDateString('ja-JP')
+                            : '-'}
                         </td>
                         {/* Priority */}
                         <td className="py-2 px-3" onClick={(e) => e.stopPropagation()}>
@@ -1675,6 +1687,12 @@ function LeadsPage() {
                     'HubSpotで商談履歴を確認'
                   )}
                 </button>
+                {selectedLead.hs_deal_exists && selectedLead.hs_deal_owner && (
+                  <p className="mt-1 text-xs text-gray-600">担当: {selectedLead.hs_deal_owner}</p>
+                )}
+                {selectedLead.hs_deal_exists && selectedLead.hs_deal_created_at && (
+                  <p className="mt-0.5 text-xs text-gray-600">取引作成日: {new Date(selectedLead.hs_deal_created_at).toLocaleDateString('ja-JP')}</p>
+                )}
                 {selectedLead.hs_checked_at && (
                   <p className="mt-1 text-[10px] text-gray-400">最終チェック: {new Date(selectedLead.hs_checked_at).toLocaleString('ja-JP')}</p>
                 )}

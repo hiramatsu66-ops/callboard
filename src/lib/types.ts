@@ -29,6 +29,8 @@ export interface Lead {
   target_countries: string;
   hs_deal_exists: boolean | null;
   hs_checked_at: string | null;
+  hs_deal_owner: string;
+  hs_deal_created_at: string | null;
   created_at: string;
   updated_at: string;
   // Joined fields
