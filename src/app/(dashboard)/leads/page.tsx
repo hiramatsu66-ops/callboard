@@ -488,6 +488,44 @@ export default function LeadsPage() {
     loadLeads();
   };
 
+  const handleBulkDelete = async () => {
+    if (selectedIds.size === 0) return;
+    const count = selectAllPages ? totalCount : selectedIds.size;
+    if (!confirm(`${count}件のリードを削除しますか？この操作は取り消せません。`)) return;
+
+    if (selectAllPages) {
+      let query = supabase.from('leads').delete();
+      if (debouncedSearch) {
+        query = query.or(
+          `company_name.ilike.%${debouncedSearch}%,contact_name.ilike.%${debouncedSearch}%,phone.ilike.%${debouncedSearch}%`
+        );
+      }
+      if (statusFilter !== 'all') {
+        query = query.eq('status', statusFilter);
+      }
+      for (const s of excludedStatuses) {
+        query = query.neq('status', s);
+      }
+      if (assignedFilter !== 'all') {
+        if (assignedFilter === 'unassigned') {
+          query = query.is('assigned_to', null);
+        } else {
+          query = query.eq('assigned_to', assignedFilter);
+        }
+      }
+      await query;
+    } else {
+      const ids = Array.from(selectedIds);
+      await supabase.from('leads').delete().in('id', ids);
+    }
+    setSelectedIds(new Set());
+    setSelectAllPages(false);
+    if (selectedLead && selectedIds.has(selectedLead.id)) {
+      setSelectedLead(null);
+    }
+    loadLeads();
+  };
+
   const handleCSVUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -781,6 +819,13 @@ export default function LeadsPage() {
                 className="px-3 py-1 bg-slate-800 text-white text-sm rounded hover:bg-slate-700 disabled:opacity-50"
               >
                 ステータスを一括変更
+              </button>
+              <span className="text-gray-300">|</span>
+              <button
+                onClick={handleBulkDelete}
+                className="px-3 py-1 bg-red-600 text-white text-sm rounded hover:bg-red-700"
+              >
+                一括削除
               </button>
               <button
                 onClick={() => { setSelectedIds(new Set()); setSelectAllPages(false); }}
