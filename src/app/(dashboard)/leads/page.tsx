@@ -952,9 +952,9 @@ function LeadsPage() {
                 </button>
               </div>
             )}
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
             <span className="text-sm font-medium text-blue-800">{selectAllPages ? totalCount : selectedIds.size}件選択中</span>
-            <div className="flex items-center gap-2 ml-auto">
+            <div className="flex flex-wrap items-center gap-2 ml-auto">
               <select
                 value={bulkAssignTo}
                 onChange={(e) => setBulkAssignTo(e.target.value)}
