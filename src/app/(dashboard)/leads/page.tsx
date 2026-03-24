@@ -78,6 +78,8 @@ function LeadsPage() {
   const [aiSent, setAiSent] = useState(false);
   const [classifying, setClassifying] = useState(false);
   const [classifyReason, setClassifyReason] = useState('');
+  const [bulkClassifying, setBulkClassifying] = useState(false);
+  const [bulkClassifyProgress, setBulkClassifyProgress] = useState('');
 
   // Gmail state
   const [gmailConnected, setGmailConnected] = useState(false);
@@ -274,6 +276,51 @@ function LeadsPage() {
       setNextActivityDate(updatedLead.next_activity_date || '');
     }
     loadSidebarData(updatedLead || selectedLead);
+    loadLeads();
+  };
+
+  const handleBulkClassifyPriority = async () => {
+    if (selectedIds.size === 0) return;
+    const targetLeads = leads.filter(l => selectedIds.has(l.id));
+    if (targetLeads.length === 0) return;
+
+    setBulkClassifying(true);
+    setBulkClassifyProgress(`0 / ${targetLeads.length} 件完了`);
+
+    let done = 0;
+    for (const lead of targetLeads) {
+      try {
+        const res = await fetch('/api/classify-priority', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            lead: {
+              company_name: lead.company_name,
+              inquiry_content: lead.inquiry_content,
+              lead_source: lead.lead_source,
+              homepage: lead.homepage,
+            },
+          }),
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          await supabase
+            .from('leads')
+            .update({ priority: data.priority })
+            .eq('id', lead.id);
+        }
+      } catch {
+        // skip failed
+      }
+      done++;
+      setBulkClassifyProgress(`${done} / ${targetLeads.length} 件完了`);
+    }
+
+    setBulkClassifying(false);
+    setBulkClassifyProgress('');
+    setSelectedIds(new Set());
+    setSelectAllPages(false);
     loadLeads();
   };
 
@@ -893,6 +940,14 @@ function LeadsPage() {
                 className="px-3 py-1 bg-slate-800 text-white text-sm rounded hover:bg-slate-700 disabled:opacity-50"
               >
                 ステータスを一括変更
+              </button>
+              <span className="text-gray-300">|</span>
+              <button
+                onClick={handleBulkClassifyPriority}
+                disabled={bulkClassifying}
+                className="px-3 py-1 bg-violet-600 text-white text-sm rounded hover:bg-violet-700 disabled:opacity-50"
+              >
+                {bulkClassifying ? bulkClassifyProgress : 'AI優先度判定'}
               </button>
               <span className="text-gray-300">|</span>
               <button
