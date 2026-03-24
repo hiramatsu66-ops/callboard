@@ -160,31 +160,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const ownerMap = await buildOwnerMap(token);
-    const companyIds = await searchCompanyIds(company_name, token);
-    let deal = null;
-    let rawDealData = null;
-    for (const cid of companyIds) {
-      deal = await getLatestDealForCompany(cid, token);
-      if (deal) { rawDealData = { companyId: cid, deal }; break; }
-    }
-    // Domain fallback
-    if (!deal) {
-      const domain = extractDomain(homepage || '');
-      if (domain) {
-        const domainIds = await searchCompanyIds(domain, token);
-        for (const cid of domainIds) {
-          deal = await getLatestDealForCompany(cid, token);
-          if (deal) { rawDealData = { companyId: cid, deal, viaDomain: true }; break; }
-        }
-      }
-    }
-
-    const ownerName = deal ? (ownerMap.get(deal.hubspot_owner_id) || '') : '';
-    const dealInfo: DealInfo = {
-      exists: !!deal,
-      ownerName,
-      createdAt: deal?.createdate || null,
-    };
+    const dealInfo = await checkCompanyDeal(company_name, homepage || '', token, ownerMap);
     const now = new Date().toISOString();
 
     const supabase = createAdminClient();
@@ -203,14 +179,6 @@ export async function POST(request: NextRequest) {
       checked_at: now,
       deal_owner: dealInfo.ownerName,
       deal_created_at: dealInfo.createdAt,
-      _debug: {
-        ownerMapSize: ownerMap.size,
-        ownerMapSample: Object.fromEntries([...ownerMap.entries()].slice(0, 3)),
-        companyIds,
-        rawDealData,
-        hubspot_owner_id: deal?.hubspot_owner_id,
-        ownerLookupResult: deal ? ownerMap.get(deal.hubspot_owner_id) : null,
-      },
     });
   } catch (error) {
     console.error('HubSpot check error:', error);
