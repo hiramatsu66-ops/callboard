@@ -48,56 +48,72 @@ async function getLatestDealForCompany(
   companyId: string,
   token: string
 ): Promise<{ dealname: string; hubspot_owner_id: string; createdate: string } | null> {
-  // 1. Get associated deal IDs via Associations API
-  const assocRes = await fetch(
-    `${HUBSPOT_API}/crm/v3/objects/companies/${companyId}/associations/deals`,
-    { headers: { Authorization: `Bearer ${token}` } }
-  );
-  if (!assocRes.ok) return null;
-  const assocData = await assocRes.json();
-  const dealIds: string[] = (assocData.results || []).map((r: { id: string }) => r.id);
-  if (dealIds.length === 0) return null;
-
-  // 2. Batch get deal properties
-  const batchRes = await fetch(`${HUBSPOT_API}/crm/v3/objects/deals/batch/read`, {
+  // Use CRM Search with company association filter
+  const res = await fetch(`${HUBSPOT_API}/crm/v3/objects/deals/search`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      inputs: dealIds.slice(0, 20).map(id => ({ id })),
+      filterGroups: [{
+        filters: [{
+          propertyName: 'associations.company',
+          operator: 'EQ',
+          value: companyId,
+        }],
+      }],
       properties: ['dealname', 'hubspot_owner_id', 'createdate'],
+      sorts: [{ propertyName: 'createdate', direction: 'DESCENDING' }],
+      limit: 1,
     }),
   });
-  if (!batchRes.ok) return null;
-  const batchData = await batchRes.json();
-  if (!batchData.results || batchData.results.length === 0) return null;
 
-  // 3. Find the most recently created deal
-  const sorted = batchData.results.sort(
-    (a: { properties: { createdate: string } }, b: { properties: { createdate: string } }) =>
-      new Date(b.properties.createdate).getTime() - new Date(a.properties.createdate).getTime()
-  );
-  return sorted[0].properties;
+  if (!res.ok) {
+    console.error('Deal search failed:', res.status, await res.text().catch(() => ''));
+    return null;
+  }
+  const data = await res.json();
+  if (!data.results || data.results.length === 0) return null;
+  return data.results[0].properties;
 }
 
-async function getOwnerName(ownerId: string, token: string): Promise<string> {
-  if (!ownerId) return '';
-  const res = await fetch(`${HUBSPOT_API}/crm/v3/owners/${ownerId}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!res.ok) return '';
-  const data = await res.json();
-  const last = data.lastName || '';
-  const first = data.firstName || '';
-  return `${last}${first}`.trim() || data.email || '';
+async function buildOwnerMap(token: string): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  let after: string | undefined;
+
+  // Paginate through all owners
+  for (let i = 0; i < 10; i++) {
+    const url = new URL(`${HUBSPOT_API}/crm/v3/owners`);
+    url.searchParams.set('limit', '100');
+    if (after) url.searchParams.set('after', after);
+
+    const res = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      console.error('Owners API failed:', res.status);
+      break;
+    }
+    const data = await res.json();
+    for (const owner of data.results || []) {
+      const last = owner.lastName || '';
+      const first = owner.firstName || '';
+      const name = `${last}${first}`.trim() || owner.email || '';
+      if (name) map.set(owner.id, name);
+    }
+    if (!data.paging?.next?.after) break;
+    after = data.paging.next.after;
+  }
+
+  return map;
 }
 
 async function checkCompanyDeal(
   companyName: string,
   homepage: string,
-  token: string
+  token: string,
+  ownerMap: Map<string, string>
 ): Promise<DealInfo> {
   const noDeal: DealInfo = { exists: false, ownerName: '', createdAt: null };
 
@@ -118,7 +134,7 @@ async function checkCompanyDeal(
   for (const companyId of companyIds) {
     const deal = await getLatestDealForCompany(companyId, token);
     if (deal) {
-      const ownerName = await getOwnerName(deal.hubspot_owner_id, token);
+      const ownerName = ownerMap.get(deal.hubspot_owner_id) || '';
       return {
         exists: true,
         ownerName,
@@ -143,7 +159,8 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const dealInfo = await checkCompanyDeal(company_name, homepage || '', token);
+    const ownerMap = await buildOwnerMap(token);
+    const dealInfo = await checkCompanyDeal(company_name, homepage || '', token, ownerMap);
     const now = new Date().toISOString();
 
     const supabase = createAdminClient();
