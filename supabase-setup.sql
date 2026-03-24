@@ -154,6 +154,8 @@ insert into public.email_templates (name, subject, body) values
 -- Run this if leads table already exists
 -- ============================================
 alter table public.leads add column if not exists priority text default '' check (priority in ('', 'A', 'B', 'C'));
+alter table public.leads add column if not exists hs_deal_exists boolean;
+alter table public.leads add column if not exists hs_checked_at timestamptz;
 alter table public.leads add column if not exists industry text default '';
 alter table public.leads add column if not exists company_size text default '';
 alter table public.leads add column if not exists overseas_interest text default '';

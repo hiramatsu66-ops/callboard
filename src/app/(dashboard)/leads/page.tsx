@@ -80,6 +80,9 @@ function LeadsPage() {
   const [classifyReason, setClassifyReason] = useState('');
   const [bulkClassifying, setBulkClassifying] = useState(false);
   const [bulkClassifyProgress, setBulkClassifyProgress] = useState('');
+  const [bulkHsChecking, setBulkHsChecking] = useState(false);
+  const [bulkHsProgress, setBulkHsProgress] = useState('');
+  const [hsChecking, setHsChecking] = useState(false);
 
   // Gmail state
   const [gmailConnected, setGmailConnected] = useState(false);
@@ -322,6 +325,52 @@ function LeadsPage() {
     setSelectedIds(new Set());
     setSelectAllPages(false);
     loadLeads();
+  };
+
+  const handleBulkHsCheck = async () => {
+    if (selectedIds.size === 0) return;
+    const targetLeads = leads.filter(l => selectedIds.has(l.id));
+    if (targetLeads.length === 0) return;
+
+    setBulkHsChecking(true);
+    setBulkHsProgress(`0 / ${targetLeads.length} 件完了`);
+
+    let done = 0;
+    for (const lead of targetLeads) {
+      try {
+        await fetch('/api/hubspot-check', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ lead_id: lead.id, company_name: lead.company_name }),
+        });
+      } catch { /* skip */ }
+      done++;
+      setBulkHsProgress(`${done} / ${targetLeads.length} 件完了`);
+    }
+
+    setBulkHsChecking(false);
+    setBulkHsProgress('');
+    setSelectedIds(new Set());
+    setSelectAllPages(false);
+    loadLeads();
+  };
+
+  const handleSidebarHsCheck = async () => {
+    if (!selectedLead) return;
+    setHsChecking(true);
+    try {
+      const res = await fetch('/api/hubspot-check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lead_id: selectedLead.id, company_name: selectedLead.company_name }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setSelectedLead({ ...selectedLead, hs_deal_exists: data.deal_exists, hs_checked_at: data.checked_at });
+        loadLeads();
+      }
+    } catch { /* skip */ }
+    setHsChecking(false);
   };
 
   const handleClassifyPriority = async () => {
@@ -943,6 +992,14 @@ function LeadsPage() {
               </button>
               <span className="text-gray-300">|</span>
               <button
+                onClick={handleBulkHsCheck}
+                disabled={bulkHsChecking}
+                className="px-3 py-1 bg-orange-600 text-white text-sm rounded hover:bg-orange-700 disabled:opacity-50"
+              >
+                {bulkHsChecking ? bulkHsProgress : 'HubSpot商談チェック'}
+              </button>
+              <span className="text-gray-300">|</span>
+              <button
                 onClick={handleBulkClassifyPriority}
                 disabled={bulkClassifying}
                 className="px-3 py-1 bg-violet-600 text-white text-sm rounded hover:bg-violet-700 disabled:opacity-50"
@@ -1096,6 +1153,7 @@ function LeadsPage() {
                         { key: 'lead_source', label: '流入経路' },
                         { key: 'inquiry_date', label: '問い合わせ日' },
                         { key: 'inquiry_content', label: '問い合わせ内容' },
+                        { key: 'hs_deal_exists', label: '商談' },
                         { key: 'priority', label: '優先度' },
                         { key: 'status', label: 'ステータス' },
                         { key: 'next_activity_date', label: '次回予定' },
@@ -1244,6 +1302,16 @@ function LeadsPage() {
                             >
                               {lead.inquiry_content || '-'}
                             </span>
+                          )}
+                        </td>
+                        {/* HubSpot Deal */}
+                        <td className="py-2 px-3 text-center">
+                          {lead.hs_deal_exists === null ? (
+                            <span className="text-gray-300 text-xs">-</span>
+                          ) : lead.hs_deal_exists ? (
+                            <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-100 text-red-700">商談済</span>
+                          ) : (
+                            <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-700">未商談</span>
                           )}
                         </td>
                         {/* Priority */}
@@ -1573,6 +1641,43 @@ function LeadsPage() {
                 >
                   {CALL_RESULT_LABELS.email_sent}
                 </button>
+              </div>
+
+              {/* HubSpot Check */}
+              <div className="px-4 py-3 border-b border-gray-100">
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-xs font-semibold text-gray-700 flex items-center gap-1">
+                    <svg className="w-3.5 h-3.5 text-orange-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                    HubSpot 商談チェック
+                  </h3>
+                  {selectedLead.hs_deal_exists !== null && selectedLead.hs_deal_exists !== undefined && (
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${selectedLead.hs_deal_exists ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
+                      {selectedLead.hs_deal_exists ? '商談済' : '未商談'}
+                    </span>
+                  )}
+                </div>
+                <button
+                  onClick={handleSidebarHsCheck}
+                  disabled={hsChecking}
+                  className="w-full py-2 bg-gradient-to-r from-orange-500 to-amber-500 text-white text-xs font-medium rounded-lg hover:from-orange-600 hover:to-amber-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {hsChecking ? (
+                    <span className="flex items-center justify-center gap-1">
+                      <svg className="animate-spin w-3.5 h-3.5" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                      確認中...
+                    </span>
+                  ) : (
+                    'HubSpotで商談履歴を確認'
+                  )}
+                </button>
+                {selectedLead.hs_checked_at && (
+                  <p className="mt-1 text-[10px] text-gray-400">最終チェック: {new Date(selectedLead.hs_checked_at).toLocaleString('ja-JP')}</p>
+                )}
               </div>
 
               {/* AI Priority Classification */}
