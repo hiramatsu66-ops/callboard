@@ -51,6 +51,14 @@ export default function LeadsPage() {
   const [nextActivityDate, setNextActivityDate] = useState('');
   const [sidebarLoading, setSidebarLoading] = useState(false);
 
+  // AI Email state
+  const [aiEmailTemplateType, setAiEmailTemplateType] = useState<'initial' | 'followup' | 'appointment'>('initial');
+  const [aiGeneratedSubject, setAiGeneratedSubject] = useState('');
+  const [aiGeneratedBody, setAiGeneratedBody] = useState('');
+  const [aiGenerating, setAiGenerating] = useState(false);
+  const [aiEmailError, setAiEmailError] = useState('');
+  const [aiCopied, setAiCopied] = useState(false);
+
   // Edit call log state
   const [editingLogId, setEditingLogId] = useState<string | null>(null);
   const [editLogResult, setEditLogResult] = useState<CallResult>('no_answer');
@@ -211,6 +219,54 @@ export default function LeadsPage() {
     }
     loadSidebarData(updatedLead || selectedLead);
     loadLeads();
+  };
+
+  const handleAiGenerateEmail = async () => {
+    if (!selectedLead) return;
+    setAiGenerating(true);
+    setAiEmailError('');
+    setAiGeneratedSubject('');
+    setAiGeneratedBody('');
+
+    try {
+      const res = await fetch('/api/generate-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          lead: {
+            company_name: selectedLead.company_name,
+            contact_name: selectedLead.contact_name,
+            industry: selectedLead.industry,
+            company_size: selectedLead.company_size,
+            overseas_interest: selectedLead.overseas_interest,
+            target_countries: selectedLead.target_countries,
+            inquiry_content: selectedLead.inquiry_content,
+            homepage: selectedLead.homepage,
+            memo: selectedLead.memo,
+          },
+          template_type: aiEmailTemplateType,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        setAiEmailError(data.error || 'エラーが発生しました');
+        return;
+      }
+      setAiGeneratedSubject(data.subject);
+      setAiGeneratedBody(data.body);
+    } catch {
+      setAiEmailError('通信エラーが発生しました');
+    } finally {
+      setAiGenerating(false);
+    }
+  };
+
+  const handleAiCopyEmail = async () => {
+    const fullEmail = `件名: ${aiGeneratedSubject}\n\n${aiGeneratedBody}`;
+    await navigator.clipboard.writeText(fullEmail);
+    setAiCopied(true);
+    setTimeout(() => setAiCopied(false), 2000);
   };
 
   const handleUpdateNextActivityDate = async (date: string) => {
@@ -1239,6 +1295,102 @@ export default function LeadsPage() {
                     </button>
                   ))}
                 </div>
+              </div>
+
+              {/* AI Email Generation */}
+              <div className="px-4 py-3 border-b border-gray-100">
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-xs font-semibold text-gray-700 flex items-center gap-1">
+                    <svg className="w-3.5 h-3.5 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                    </svg>
+                    AI メール生成
+                  </h3>
+                </div>
+                <div className="flex bg-gray-100 rounded-lg overflow-hidden mb-2">
+                  {(['initial', 'followup', 'appointment'] as const).map((type) => (
+                    <button
+                      key={type}
+                      onClick={() => setAiEmailTemplateType(type)}
+                      className={`flex-1 px-2 py-1 text-[10px] font-medium transition-colors ${
+                        aiEmailTemplateType === type
+                          ? 'bg-slate-800 text-white'
+                          : 'text-gray-600 hover:bg-gray-200'
+                      }`}
+                    >
+                      {type === 'initial' ? '初回アプローチ' : type === 'followup' ? 'フォローアップ' : 'アポイント依頼'}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  onClick={handleAiGenerateEmail}
+                  disabled={aiGenerating}
+                  className="w-full py-2 bg-gradient-to-r from-amber-500 to-orange-500 text-white text-xs font-medium rounded-lg hover:from-amber-600 hover:to-orange-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {aiGenerating ? (
+                    <span className="flex items-center justify-center gap-1">
+                      <svg className="animate-spin w-3.5 h-3.5" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                      生成中...
+                    </span>
+                  ) : (
+                    'メールを生成'
+                  )}
+                </button>
+
+                {aiEmailError && (
+                  <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded-lg text-red-700 text-[10px]">
+                    {aiEmailError}
+                  </div>
+                )}
+
+                {aiGeneratedSubject && (
+                  <div className="mt-2 space-y-2">
+                    <div>
+                      <label className="block text-[10px] font-medium text-gray-500 mb-0.5">件名</label>
+                      <input
+                        type="text"
+                        value={aiGeneratedSubject}
+                        onChange={(e) => setAiGeneratedSubject(e.target.value)}
+                        className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs focus:outline-none focus:ring-1 focus:ring-amber-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-medium text-gray-500 mb-0.5">本文</label>
+                      <textarea
+                        value={aiGeneratedBody}
+                        onChange={(e) => setAiGeneratedBody(e.target.value)}
+                        rows={8}
+                        className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs focus:outline-none focus:ring-1 focus:ring-amber-500 resize-y"
+                      />
+                    </div>
+                    <div className="flex gap-1.5">
+                      <button
+                        onClick={handleAiCopyEmail}
+                        className="flex-1 py-1.5 bg-slate-800 text-white text-[10px] font-medium rounded-lg hover:bg-slate-700 transition-colors"
+                      >
+                        {aiCopied ? 'コピーしました!' : 'コピー'}
+                      </button>
+                      <button
+                        onClick={handleAiGenerateEmail}
+                        disabled={aiGenerating}
+                        className="px-3 py-1.5 border border-gray-300 text-[10px] font-medium rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+                      >
+                        再生成
+                      </button>
+                    </div>
+                    {selectedLead.email && (
+                      <a
+                        href={`mailto:${selectedLead.email}?subject=${encodeURIComponent(aiGeneratedSubject)}&body=${encodeURIComponent(aiGeneratedBody)}`}
+                        className="block w-full py-1.5 text-center bg-blue-600 text-white text-[10px] font-medium rounded-lg hover:bg-blue-700 transition-colors"
+                      >
+                        メールアプリで開く
+                      </a>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Activity History */}
