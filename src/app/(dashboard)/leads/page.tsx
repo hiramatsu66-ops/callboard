@@ -948,9 +948,9 @@ export default function LeadsPage() {
             <>
               <div className="overflow-x-auto">
                 <table className="w-full">
-                  <thead>
+                  <thead className="sticky top-0 z-10">
                     <tr className="bg-gray-50 border-b border-gray-200">
-                      <th className="py-3 px-3 w-8">
+                      <th className="py-3 px-3 w-8 bg-gray-50">
                         <input
                           type="checkbox"
                           checked={selectedIds.size === leads.length && leads.length > 0}
@@ -975,7 +975,7 @@ export default function LeadsPage() {
                         <th
                           key={key}
                           onClick={() => toggleSort(key)}
-                          className="text-left py-3 px-3 text-sm font-medium text-gray-500 cursor-pointer hover:text-gray-700 select-none"
+                          className="text-left py-3 px-3 text-sm font-medium text-gray-500 cursor-pointer hover:text-gray-700 select-none bg-gray-50"
                         >
                           {label}
                           {sortColumn === key ? (sortAscending ? ' ▲' : ' ▼') : ''}
