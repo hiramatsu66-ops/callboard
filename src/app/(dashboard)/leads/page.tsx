@@ -1121,7 +1121,7 @@ function LeadsPage() {
         </div>
 
         {/* Table */}
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200">
           {loading ? (
             <div className="flex items-center justify-center h-64">
               <p className="text-gray-500">読み込み中...</p>
@@ -1132,7 +1132,7 @@ function LeadsPage() {
             </div>
           ) : (
             <>
-              <div className="overflow-x-auto">
+              <div className="overflow-auto" style={{ maxHeight: 'calc(100vh - 260px)' }}>
                 <table className="w-full">
                   <thead className="sticky top-0 z-10">
                     <tr className="bg-gray-50 border-b border-gray-200">
