@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback, useMemo, memo } from 'react';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase';
 import type {
   Lead,
@@ -24,16 +25,22 @@ const PAGE_SIZE = 50;
 const supabase = createClient();
 
 export default function LeadsPage() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+
   const [leads, setLeads] = useState<Lead[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [totalCount, setTotalCount] = useState(0);
-  const [page, setPage] = useState(0);
-  const [search, setSearch] = useState('');
-  const [debouncedSearch, setDebouncedSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<LeadStatus | 'all'>('all');
-  const [excludedStatuses, setExcludedStatuses] = useState<Set<LeadStatus>>(new Set());
+  const [page, setPage] = useState(() => Number(searchParams.get('page') || '0'));
+  const [search, setSearch] = useState(() => searchParams.get('q') || '');
+  const [debouncedSearch, setDebouncedSearch] = useState(() => searchParams.get('q') || '');
+  const [statusFilter, setStatusFilter] = useState<LeadStatus | 'all'>(() => (searchParams.get('status') as LeadStatus | 'all') || 'all');
+  const [excludedStatuses, setExcludedStatuses] = useState<Set<LeadStatus>>(() => {
+    const ex = searchParams.get('exclude');
+    return ex ? new Set(ex.split(',') as LeadStatus[]) : new Set();
+  });
   const [showStatusDropdown, setShowStatusDropdown] = useState(false);
-  const [assignedFilter, setAssignedFilter] = useState<string>('all');
+  const [assignedFilter, setAssignedFilter] = useState<string>(() => searchParams.get('assigned') || 'all');
   const [loading, setLoading] = useState(true);
   const [showImportModal, setShowImportModal] = useState(false);
   const [csvData, setCsvData] = useState<Record<string, string>[]>([]);
@@ -81,8 +88,8 @@ export default function LeadsPage() {
   const [bulkAssignTo, setBulkAssignTo] = useState('');
   const [bulkStatus, setBulkStatus] = useState('');
   const [selectAllPages, setSelectAllPages] = useState(false);
-  const [sortColumn, setSortColumn] = useState<string>('created_at');
-  const [sortAscending, setSortAscending] = useState(false);
+  const [sortColumn, setSortColumn] = useState<string>(() => searchParams.get('sort') || 'created_at');
+  const [sortAscending, setSortAscending] = useState(() => searchParams.get('asc') === '1');
 
   // Debounce search input
   useEffect(() => {
@@ -92,6 +99,21 @@ export default function LeadsPage() {
     }, 300);
     return () => clearTimeout(timer);
   }, [search]);
+
+  // Sync filters to URL
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (debouncedSearch) params.set('q', debouncedSearch);
+    if (statusFilter !== 'all') params.set('status', statusFilter);
+    if (excludedStatuses.size > 0) params.set('exclude', Array.from(excludedStatuses).join(','));
+    if (assignedFilter !== 'all') params.set('assigned', assignedFilter);
+    if (sortColumn !== 'created_at') params.set('sort', sortColumn);
+    if (sortAscending) params.set('asc', '1');
+    if (page > 0) params.set('page', String(page));
+    const qs = params.toString();
+    const newUrl = qs ? `?${qs}` : '/leads';
+    router.replace(newUrl, { scroll: false });
+  }, [debouncedSearch, statusFilter, excludedStatuses, assignedFilter, sortColumn, sortAscending, page, router]);
 
   // Load Gmail connection status
   useEffect(() => {
