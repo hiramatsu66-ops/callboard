@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback, useMemo, memo } from 'react';
+import { useEffect, useState, useCallback, useMemo, memo, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase';
 import type {
@@ -24,7 +24,15 @@ import Papa from 'papaparse';
 const PAGE_SIZE = 50;
 const supabase = createClient();
 
-export default function LeadsPage() {
+export default function LeadsPageWrapper() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center h-64"><p className="text-gray-500">読み込み中...</p></div>}>
+      <LeadsPage />
+    </Suspense>
+  );
+}
+
+function LeadsPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
