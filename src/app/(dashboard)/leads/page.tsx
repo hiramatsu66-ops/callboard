@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback, useMemo, memo, Suspense } from 'react';
+import { useEffect, useState, useCallback, useMemo, memo, useRef, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase';
 import type {
@@ -35,6 +35,7 @@ export default function LeadsPageWrapper() {
 function LeadsPage() {
   const searchParams = useSearchParams();
 
+  const tableRef = useRef<HTMLDivElement>(null);
   const [leads, setLeads] = useState<Lead[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [totalCount, setTotalCount] = useState(0);
@@ -366,8 +367,9 @@ function LeadsPage() {
       });
       const data = await res.json();
       if (res.ok) {
-        setSelectedLead({ ...selectedLead, hs_deal_exists: data.deal_exists, hs_checked_at: data.checked_at, hs_deal_owner: data.deal_owner || '', hs_deal_created_at: data.deal_created_at || null });
-        loadLeads();
+        const updated = { ...selectedLead, hs_deal_exists: data.deal_exists, hs_checked_at: data.checked_at, hs_deal_owner: data.deal_owner || '', hs_deal_created_at: data.deal_created_at || null };
+        setSelectedLead(updated);
+        setLeads(prev => prev.map(l => l.id === updated.id ? { ...l, ...updated } : l));
       }
     } catch { /* skip */ }
     setHsChecking(false);
@@ -1132,7 +1134,7 @@ function LeadsPage() {
             </div>
           ) : (
             <>
-              <div className="overflow-auto" style={{ maxHeight: 'calc(100vh - 260px)' }}>
+              <div ref={tableRef} className="overflow-auto" style={{ maxHeight: 'calc(100vh - 260px)' }}>
                 <table className="w-full">
                   <thead className="sticky top-0 z-10">
                     <tr className="bg-gray-50 border-b border-gray-200">
@@ -1472,16 +1474,17 @@ function LeadsPage() {
                   </p>
                   <div className="flex gap-2">
                     <button
-                      onClick={() => setPage(Math.max(0, page - 1))}
+                      onClick={() => { setPage(Math.max(0, page - 1)); tableRef.current?.scrollTo(0, 0); }}
                       disabled={page === 0}
                       className="px-3 py-1 text-sm border border-gray-300 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100"
                     >
                       前へ
                     </button>
                     <button
-                      onClick={() =>
-                        setPage(Math.min(totalPages - 1, page + 1))
-                      }
+                      onClick={() => {
+                        setPage(Math.min(totalPages - 1, page + 1));
+                        tableRef.current?.scrollTo(0, 0);
+                      }}
                       disabled={page >= totalPages - 1}
                       className="px-3 py-1 text-sm border border-gray-300 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100"
                     >
