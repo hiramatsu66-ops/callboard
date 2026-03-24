@@ -21,6 +21,10 @@ export interface Lead {
   status: LeadStatus;
   memo: string;
   assigned_to: string | null;
+  industry: string;
+  company_size: string;
+  overseas_interest: string;
+  target_countries: string;
   created_at: string;
   updated_at: string;
   // Joined fields
@@ -97,6 +101,19 @@ export const CALL_RESULT_LABELS: Record<CallResult, string> = {
   rejected: '断り',
   invalid: '番号無効',
 };
+
+export const INDUSTRY_OPTIONS = [
+  '製造', '卸売・小売', 'IT・通信', 'サービス', '飲食', '不動産',
+  'アパレル', '医療・福祉', '宣伝・広告', 'インフラ', 'その他',
+] as const;
+
+export const COMPANY_SIZE_OPTIONS = [
+  '〜10名', '11〜50名', '51〜100名', '101〜500名', '501〜1000名', '1001名以上',
+] as const;
+
+export const OVERSEAS_INTEREST_OPTIONS = [
+  '検討中', '情報収集段階', '具体的に計画中', '既に進出済（拡大検討）', '不明',
+] as const;
 
 export const CALL_RESULT_COLORS: Record<CallResult, string> = {
   no_answer: 'bg-gray-100 text-gray-700 hover:bg-gray-200',

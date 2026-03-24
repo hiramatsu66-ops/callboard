@@ -150,6 +150,15 @@ insert into public.email_templates (name, subject, body) values
 引き続きよろしくお願いいたします。');
 
 -- ============================================
+-- 5b. ADD COLUMNS FOR AI EMAIL GENERATION
+-- Run this if leads table already exists
+-- ============================================
+alter table public.leads add column if not exists industry text default '';
+alter table public.leads add column if not exists company_size text default '';
+alter table public.leads add column if not exists overseas_interest text default '';
+alter table public.leads add column if not exists target_countries text default '';
+
+-- ============================================
 -- 6. HELPER: auto-update updated_at
 -- ============================================
 create or replace function public.update_updated_at()

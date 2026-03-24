@@ -9,7 +9,18 @@ import {
   LEAD_STATUS_COLORS,
   CALL_RESULT_LABELS,
   CALL_RESULT_COLORS,
+  INDUSTRY_OPTIONS,
+  COMPANY_SIZE_OPTIONS,
+  OVERSEAS_INTEREST_OPTIONS,
 } from '@/lib/types';
+
+type EmailTemplateType = 'initial' | 'followup' | 'appointment';
+
+const EMAIL_TEMPLATE_LABELS: Record<EmailTemplateType, string> = {
+  initial: '初回アプローチ',
+  followup: 'フォローアップ',
+  appointment: 'アポイント依頼',
+};
 
 export default function LeadDetailPage({
   params,
@@ -30,9 +41,21 @@ export default function LeadDetailPage({
     status: '' as LeadStatus,
     assigned_to: '' as string | null,
     memo: '',
+    industry: '',
+    company_size: '',
+    overseas_interest: '',
+    target_countries: '',
   });
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
+
+  // AI Email state
+  const [emailTemplateType, setEmailTemplateType] = useState<EmailTemplateType>('initial');
+  const [generatedSubject, setGeneratedSubject] = useState('');
+  const [generatedBody, setGeneratedBody] = useState('');
+  const [generating, setGenerating] = useState(false);
+  const [emailError, setEmailError] = useState('');
+  const [copied, setCopied] = useState(false);
 
   const router = useRouter();
   const supabase = createClient();
@@ -54,6 +77,10 @@ export default function LeadDetailPage({
         status: data.status,
         assigned_to: data.assigned_to,
         memo: data.memo || '',
+        industry: data.industry || '',
+        company_size: data.company_size || '',
+        overseas_interest: data.overseas_interest || '',
+        target_countries: data.target_countries || '',
       });
     }
   }, [id, supabase]);
@@ -94,7 +121,6 @@ export default function LeadDetailPage({
       memo,
     });
 
-    // Update lead status based on result
     let newStatus: LeadStatus = lead?.status || 'new';
     if (result === 'appointment') {
       newStatus = 'appointment';
@@ -130,12 +156,66 @@ export default function LeadDetailPage({
         status: editForm.status,
         assigned_to: editForm.assigned_to || null,
         memo: editForm.memo,
+        industry: editForm.industry,
+        company_size: editForm.company_size,
+        overseas_interest: editForm.overseas_interest,
+        target_countries: editForm.target_countries,
       })
       .eq('id', id);
 
     setEditing(false);
     setSaving(false);
     loadLead();
+  };
+
+  const handleGenerateEmail = async () => {
+    if (!lead) return;
+    setGenerating(true);
+    setEmailError('');
+    setGeneratedSubject('');
+    setGeneratedBody('');
+
+    try {
+      const res = await fetch('/api/generate-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          lead: {
+            company_name: lead.company_name,
+            contact_name: lead.contact_name,
+            industry: lead.industry,
+            company_size: lead.company_size,
+            overseas_interest: lead.overseas_interest,
+            target_countries: lead.target_countries,
+            inquiry_content: lead.inquiry_content,
+            homepage: lead.homepage,
+            memo: lead.memo,
+          },
+          template_type: emailTemplateType,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setEmailError(data.error || 'エラーが発生しました');
+        return;
+      }
+
+      setGeneratedSubject(data.subject);
+      setGeneratedBody(data.body);
+    } catch {
+      setEmailError('通信エラーが発生しました');
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const handleCopyEmail = async () => {
+    const fullEmail = `件名: ${generatedSubject}\n\n${generatedBody}`;
+    await navigator.clipboard.writeText(fullEmail);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   if (loading) {
@@ -272,6 +352,71 @@ export default function LeadDetailPage({
                 </div>
                 <div>
                   <label className="block text-xs text-gray-500 mb-1">
+                    業種
+                  </label>
+                  <select
+                    value={editForm.industry}
+                    onChange={(e) =>
+                      setEditForm({ ...editForm, industry: e.target.value })
+                    }
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-500 bg-white"
+                  >
+                    <option value="">選択してください</option>
+                    {INDUSTRY_OPTIONS.map((opt) => (
+                      <option key={opt} value={opt}>{opt}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">
+                    企業規模
+                  </label>
+                  <select
+                    value={editForm.company_size}
+                    onChange={(e) =>
+                      setEditForm({ ...editForm, company_size: e.target.value })
+                    }
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-500 bg-white"
+                  >
+                    <option value="">選択してください</option>
+                    {COMPANY_SIZE_OPTIONS.map((opt) => (
+                      <option key={opt} value={opt}>{opt}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">
+                    海外展開への関心
+                  </label>
+                  <select
+                    value={editForm.overseas_interest}
+                    onChange={(e) =>
+                      setEditForm({ ...editForm, overseas_interest: e.target.value })
+                    }
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-500 bg-white"
+                  >
+                    <option value="">選択してください</option>
+                    {OVERSEAS_INTEREST_OPTIONS.map((opt) => (
+                      <option key={opt} value={opt}>{opt}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">
+                    対象国・地域
+                  </label>
+                  <input
+                    type="text"
+                    value={editForm.target_countries}
+                    onChange={(e) =>
+                      setEditForm({ ...editForm, target_countries: e.target.value })
+                    }
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-500"
+                    placeholder="例: 東南アジア、アメリカ"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">
                     ステータス
                   </label>
                   <select
@@ -359,6 +504,10 @@ export default function LeadDetailPage({
                     <p className="text-sm text-gray-800 mt-0.5">-</p>
                   )}
                 </div>
+                <InfoRow label="業種" value={lead.industry || '-'} />
+                <InfoRow label="企業規模" value={lead.company_size || '-'} />
+                <InfoRow label="海外展開への関心" value={lead.overseas_interest || '-'} />
+                <InfoRow label="対象国・地域" value={lead.target_countries || '-'} />
                 <InfoRow
                   label="架電担当"
                   value={lead.profiles?.name || '未割当'}
@@ -378,7 +527,7 @@ export default function LeadDetailPage({
           </div>
         </div>
 
-        {/* Call Recording & History */}
+        {/* Call Recording, AI Email & History */}
         <div className="col-span-2 space-y-6">
           {/* Call Result Recording */}
           <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
@@ -405,6 +554,103 @@ export default function LeadDetailPage({
               rows={2}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-500 resize-none"
             />
+          </div>
+
+          {/* AI Email Generation */}
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-sm font-semibold text-gray-800 flex items-center gap-2">
+                <svg className="w-4 h-4 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                AI メール生成
+              </h2>
+              <div className="flex bg-gray-100 rounded-lg overflow-hidden">
+                {(Object.keys(EMAIL_TEMPLATE_LABELS) as EmailTemplateType[]).map((type) => (
+                  <button
+                    key={type}
+                    onClick={() => setEmailTemplateType(type)}
+                    className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                      emailTemplateType === type
+                        ? 'bg-slate-800 text-white'
+                        : 'text-gray-600 hover:bg-gray-200'
+                    }`}
+                  >
+                    {EMAIL_TEMPLATE_LABELS[type]}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <button
+              onClick={handleGenerateEmail}
+              disabled={generating}
+              className="w-full py-2.5 bg-gradient-to-r from-amber-500 to-orange-500 text-white text-sm font-medium rounded-lg hover:from-amber-600 hover:to-orange-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {generating ? (
+                <span className="flex items-center justify-center gap-2">
+                  <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  生成中...
+                </span>
+              ) : (
+                `${EMAIL_TEMPLATE_LABELS[emailTemplateType]}メールを生成`
+              )}
+            </button>
+
+            {emailError && (
+              <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
+                {emailError}
+              </div>
+            )}
+
+            {generatedSubject && (
+              <div className="mt-4 space-y-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">件名</label>
+                  <input
+                    type="text"
+                    value={generatedSubject}
+                    onChange={(e) => setGeneratedSubject(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">本文</label>
+                  <textarea
+                    value={generatedBody}
+                    onChange={(e) => setGeneratedBody(e.target.value)}
+                    rows={10}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 resize-y"
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleCopyEmail}
+                    className="flex-1 py-2 bg-slate-800 text-white text-sm font-medium rounded-lg hover:bg-slate-700 transition-colors"
+                  >
+                    {copied ? 'コピーしました!' : 'クリップボードにコピー'}
+                  </button>
+                  <button
+                    onClick={handleGenerateEmail}
+                    disabled={generating}
+                    className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+                  >
+                    再生成
+                  </button>
+                </div>
+                {lead.email && (
+                  <a
+                    href={`mailto:${lead.email}?subject=${encodeURIComponent(generatedSubject)}&body=${encodeURIComponent(generatedBody)}`}
+                    className="block w-full py-2 text-center bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
+                  >
+                    メールアプリで開く
+                  </a>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Call History */}
