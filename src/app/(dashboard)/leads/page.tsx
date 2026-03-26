@@ -18,11 +18,40 @@ import {
   CALL_RESULT_COLORS,
   PRIORITY_OPTIONS,
   PRIORITY_COLORS,
+  LEAD_SOURCE_LABELS,
+  LEAD_SOURCE_COLORS,
 } from '@/lib/types';
+import type { LeadSource } from '@/lib/types';
 import Papa from 'papaparse';
 
 const PAGE_SIZE = 50;
 const supabase = createClient();
+
+const DEFAULT_COLUMN_ORDER = [
+  'company_name', 'contact_name', 'phone', 'email', 'homepage',
+  'lead_source', 'inquiry_date', 'inquiry_content', 'hs_deal_exists',
+  'hs_deal_owner', 'hs_deal_created_at', 'priority', 'status',
+  'next_activity_date', 'assigned_to', 'memo',
+];
+
+const COLUMN_LABELS: Record<string, string> = {
+  company_name: '会社名',
+  contact_name: '担当者名',
+  phone: '電話番号',
+  email: 'メール',
+  homepage: 'HP',
+  lead_source: '流入経路',
+  inquiry_date: '問い合わせ日',
+  inquiry_content: '問い合わせ内容',
+  hs_deal_exists: '商談',
+  hs_deal_owner: '商談担当',
+  hs_deal_created_at: '取引作成日',
+  priority: '優先度',
+  status: 'ステータス',
+  next_activity_date: '次回予定',
+  assigned_to: '担当',
+  memo: 'メモ',
+};
 
 export default function LeadsPageWrapper() {
   return (
@@ -47,6 +76,8 @@ function LeadsPage() {
     const ex = searchParams.get('exclude');
     return ex ? new Set(ex.split(',') as LeadStatus[]) : new Set();
   });
+  const [excludeDeal, setExcludeDeal] = useState<boolean>(() => searchParams.get('excludeDeal') === '1');
+  const [excludeHasNextActivity, setExcludeHasNextActivity] = useState<boolean>(() => searchParams.get('excludeNextAct') === '1');
   const [showStatusDropdown, setShowStatusDropdown] = useState(false);
   const [assignedFilter, setAssignedFilter] = useState<string>(() => searchParams.get('assigned') || 'all');
   const [loading, setLoading] = useState(true);
@@ -98,6 +129,35 @@ function LeadsPage() {
   const [editingCell, setEditingCell] = useState<string | null>(null);
   const [editCellValue, setEditCellValue] = useState('');
 
+  // Column order state (persisted to localStorage)
+  const [columnOrder, setColumnOrder] = useState<string[]>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('callboard-column-order');
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved) as string[];
+          // Ensure all columns are present (handle added/removed columns)
+          const allCols = new Set(DEFAULT_COLUMN_ORDER);
+          const validSaved = parsed.filter(k => allCols.has(k));
+          const missing = DEFAULT_COLUMN_ORDER.filter(k => !validSaved.includes(k));
+          return [...validSaved, ...missing];
+        } catch { /* fall through */ }
+      }
+    }
+    return DEFAULT_COLUMN_ORDER;
+  });
+  const dragColumnRef = useRef<string | null>(null);
+  const [dragOverColumn, setDragOverColumn] = useState<string | null>(null);
+
+  // Bulk email state
+  const [showBulkEmailModal, setShowBulkEmailModal] = useState(false);
+  const [bulkEmails, setBulkEmails] = useState<{ lead: Lead; subject: string; body: string; selected: boolean }[]>([]);
+  const [bulkEmailGenerating, setBulkEmailGenerating] = useState(false);
+  const [bulkEmailGenerateProgress, setBulkEmailGenerateProgress] = useState('');
+  const [bulkEmailSending, setBulkEmailSending] = useState(false);
+  const [bulkEmailSendProgress, setBulkEmailSendProgress] = useState('');
+  const [bulkEmailTemplateType, setBulkEmailTemplateType] = useState<'initial' | 'followup' | 'appointment' | 'reapproach'>('reapproach');
+
   // Bulk selection
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkAssignTo, setBulkAssignTo] = useState('');
@@ -121,6 +181,8 @@ function LeadsPage() {
     if (debouncedSearch) params.set('q', debouncedSearch);
     if (statusFilter !== 'all') params.set('status', statusFilter);
     if (excludedStatuses.size > 0) params.set('exclude', Array.from(excludedStatuses).join(','));
+    if (excludeDeal) params.set('excludeDeal', '1');
+    if (excludeHasNextActivity) params.set('excludeNextAct', '1');
     if (assignedFilter !== 'all') params.set('assigned', assignedFilter);
     if (sortColumn !== 'created_at') params.set('sort', sortColumn);
     if (sortAscending) params.set('asc', '1');
@@ -128,7 +190,7 @@ function LeadsPage() {
     const qs = params.toString();
     const newUrl = qs ? `/leads?${qs}` : '/leads';
     window.history.replaceState(null, '', newUrl);
-  }, [debouncedSearch, statusFilter, excludedStatuses, assignedFilter, sortColumn, sortAscending, page]);
+  }, [debouncedSearch, statusFilter, excludedStatuses, excludeDeal, excludeHasNextActivity, assignedFilter, sortColumn, sortAscending, page]);
 
   // Load Gmail connection status
   useEffect(() => {
@@ -176,6 +238,14 @@ function LeadsPage() {
         }
       }
 
+      if (excludeDeal) {
+        query = query.or('hs_deal_exists.is.null,hs_deal_exists.eq.false');
+      }
+
+      if (excludeHasNextActivity) {
+        query = query.is('next_activity_date', null);
+      }
+
       const { data, count } = await query
         .order(sortColumn, { ascending: sortAscending })
         .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
@@ -189,7 +259,7 @@ function LeadsPage() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, debouncedSearch, statusFilter, assignedFilter, sortColumn, sortAscending, excludedStatuses]);
+  }, [page, debouncedSearch, statusFilter, assignedFilter, sortColumn, sortAscending, excludedStatuses, excludeDeal, excludeHasNextActivity]);
 
   useEffect(() => {
     const loadProfiles = async () => {
@@ -278,14 +348,16 @@ function LeadsPage() {
     if (updatedLead) {
       setSelectedLead(updatedLead);
       setNextActivityDate(updatedLead.next_activity_date || '');
+      setLeads(prev => prev.map(l => l.id === updatedLead.id ? updatedLead : l));
     }
     loadSidebarData(updatedLead || selectedLead);
-    loadLeads();
   };
 
   const handleBulkClassifyPriority = async () => {
     if (selectedIds.size === 0) return;
-    const targetLeads = leads.filter(l => selectedIds.has(l.id));
+    const targetLeads = selectAllPages
+      ? await (async () => { setBulkClassifying(true); setBulkClassifyProgress('リード取得中...'); return fetchAllMatchingLeads(); })()
+      : leads.filter(l => selectedIds.has(l.id));
     if (targetLeads.length === 0) return;
 
     setBulkClassifying(true);
@@ -330,7 +402,9 @@ function LeadsPage() {
 
   const handleBulkHsCheck = async () => {
     if (selectedIds.size === 0) return;
-    const targetLeads = leads.filter(l => selectedIds.has(l.id));
+    const targetLeads = selectAllPages
+      ? await (async () => { setBulkHsChecking(true); setBulkHsProgress('リード取得中...'); return fetchAllMatchingLeads(); })()
+      : leads.filter(l => selectedIds.has(l.id));
     if (targetLeads.length === 0) return;
 
     setBulkHsChecking(true);
@@ -342,7 +416,7 @@ function LeadsPage() {
         await fetch('/api/hubspot-check', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ lead_id: lead.id, company_name: lead.company_name, homepage: lead.homepage }),
+          body: JSON.stringify({ lead_id: lead.id, company_name: lead.company_name, homepage: lead.homepage, email: lead.email, contact_name: lead.contact_name }),
         });
       } catch { /* skip */ }
       done++;
@@ -356,6 +430,107 @@ function LeadsPage() {
     loadLeads();
   };
 
+  const handleBulkEmailGenerate = async () => {
+    if (selectedIds.size === 0) return;
+    const targetLeads = selectAllPages
+      ? await (async () => { setBulkEmailGenerating(true); setBulkEmailGenerateProgress('リード取得中...'); return fetchAllMatchingLeads(); })()
+      : leads.filter(l => selectedIds.has(l.id));
+    // メールアドレスがあるリードのみ
+    const emailableLeads = targetLeads.filter(l => l.email);
+    if (emailableLeads.length === 0) { alert('メールアドレスのあるリードがありません。'); return; }
+
+    setBulkEmailGenerating(true);
+    setBulkEmailGenerateProgress(`0 / ${emailableLeads.length} 件生成中`);
+    const results: { lead: Lead; subject: string; body: string; selected: boolean }[] = [];
+
+    for (let i = 0; i < emailableLeads.length; i++) {
+      const lead = emailableLeads[i];
+      try {
+        const res = await fetch('/api/generate-email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            lead: {
+              company_name: lead.company_name,
+              contact_name: lead.contact_name,
+              inquiry_content: lead.inquiry_content,
+              homepage: lead.homepage,
+              memo: lead.memo,
+            },
+            template_type: bulkEmailTemplateType,
+          }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          results.push({ lead, subject: data.subject, body: data.body, selected: true });
+        } else {
+          results.push({ lead, subject: '(生成失敗)', body: data.error || '', selected: false });
+        }
+      } catch {
+        results.push({ lead, subject: '(生成失敗)', body: '', selected: false });
+      }
+      setBulkEmailGenerateProgress(`${i + 1} / ${emailableLeads.length} 件生成中`);
+    }
+
+    setBulkEmails(results);
+    setBulkEmailGenerating(false);
+    setBulkEmailGenerateProgress('');
+    setShowBulkEmailModal(true);
+  };
+
+  const handleBulkEmailSend = async () => {
+    const toSend = bulkEmails.filter(e => e.selected && e.subject !== '(生成失敗)');
+    if (toSend.length === 0) return;
+
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    setBulkEmailSending(true);
+    setBulkEmailSendProgress(`0 / ${toSend.length} 件送信中`);
+    let sent = 0;
+
+    for (const item of toSend) {
+      try {
+        const res = await fetch('/api/gmail/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            to: item.lead.email,
+            subject: item.subject,
+            body: item.body,
+            user_id: user.id,
+          }),
+        });
+        if (res.ok) {
+          // コールログ記録
+          await supabase.from('call_logs').insert({
+            lead_id: item.lead.id,
+            caller_id: user.id,
+            result: 'email_sent',
+            memo: `件名: ${item.subject}`,
+            activity_type: 'email',
+          });
+          // 次回活動予定日を半年後に設定
+          const sixMonthsLater = new Date();
+          sixMonthsLater.setMonth(sixMonthsLater.getMonth() + 6);
+          const nextDate = sixMonthsLater.toISOString().split('T')[0];
+          await supabase.from('leads').update({ next_activity_date: nextDate }).eq('id', item.lead.id);
+        }
+      } catch { /* skip */ }
+      sent++;
+      setBulkEmailSendProgress(`${sent} / ${toSend.length} 件送信中`);
+    }
+
+    setBulkEmailSending(false);
+    setBulkEmailSendProgress('');
+    setShowBulkEmailModal(false);
+    setBulkEmails([]);
+    setSelectedIds(new Set());
+    setSelectAllPages(false);
+    alert(`${sent}件のメールを送信しました。`);
+    loadLeads();
+  };
+
   const handleSidebarHsCheck = async () => {
     if (!selectedLead) return;
     setHsChecking(true);
@@ -363,7 +538,7 @@ function LeadsPage() {
       const res = await fetch('/api/hubspot-check', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lead_id: selectedLead.id, company_name: selectedLead.company_name, homepage: selectedLead.homepage }),
+        body: JSON.stringify({ lead_id: selectedLead.id, company_name: selectedLead.company_name, homepage: selectedLead.homepage, email: selectedLead.email, contact_name: selectedLead.contact_name }),
       });
       const data = await res.json();
       if (res.ok) {
@@ -406,9 +581,10 @@ function LeadsPage() {
         .update({ priority: data.priority })
         .eq('id', selectedLead.id);
 
-      setSelectedLead({ ...selectedLead, priority: data.priority });
+      const updatedLead = { ...selectedLead, priority: data.priority };
+      setSelectedLead(updatedLead);
+      setLeads(prev => prev.map(l => l.id === updatedLead.id ? updatedLead : l));
       setClassifyReason(`${data.priority} - ${data.reason}`);
-      loadLeads();
     } catch {
       setClassifyReason('通信エラーが発生しました');
     } finally {
@@ -494,6 +670,8 @@ function LeadsPage() {
       }
 
       setAiSent(true);
+      setAiGeneratedSubject('');
+      setAiGeneratedBody('');
       setTimeout(() => setAiSent(false), 3000);
 
       // Auto-record email activity
@@ -504,6 +682,17 @@ function LeadsPage() {
           memo: `件名: ${aiGeneratedSubject}`,
           activity_type: 'email',
       });
+
+      // 次回活動予定日を半年後に自動設定
+      const sixMonthsLater = new Date();
+      sixMonthsLater.setMonth(sixMonthsLater.getMonth() + 6);
+      const nextDate = sixMonthsLater.toISOString().split('T')[0];
+      await supabase.from('leads').update({ next_activity_date: nextDate }).eq('id', selectedLead.id);
+      const updatedLead = { ...selectedLead, next_activity_date: nextDate };
+      setSelectedLead(updatedLead);
+      setNextActivityDate(nextDate);
+      setLeads(prev => prev.map(l => l.id === updatedLead.id ? updatedLead : l));
+
       loadSidebarData(selectedLead);
     } catch {
       setAiEmailError('通信エラーが発生しました');
@@ -519,7 +708,9 @@ function LeadsPage() {
       .from('leads')
       .update({ next_activity_date: date || null })
       .eq('id', selectedLead.id);
-    loadLeads();
+    const updatedLead = { ...selectedLead, next_activity_date: date || null };
+    setSelectedLead(updatedLead);
+    setLeads(prev => prev.map(l => l.id === updatedLead.id ? updatedLead : l));
   };
 
   const handleStartEditLog = (log: CallLog) => {
@@ -563,7 +754,10 @@ function LeadsPage() {
     }
     await supabase.from('leads').update(updateData).eq('id', leadId);
     setEditingCell(null);
-    loadLeads();
+    setLeads(prev => prev.map(l => l.id === leadId ? { ...l, ...updateData } as Lead : l));
+    if (selectedLead?.id === leadId) {
+      setSelectedLead(prev => prev ? { ...prev, ...updateData } as Lead : prev);
+    }
   };
 
   const cancelEditCell = () => {
@@ -580,6 +774,39 @@ function LeadsPage() {
       else next.add(id);
       return next;
     });
+  };
+
+  // Column order persistence
+  useEffect(() => {
+    localStorage.setItem('callboard-column-order', JSON.stringify(columnOrder));
+  }, [columnOrder]);
+
+  const handleColumnDragStart = (key: string) => {
+    dragColumnRef.current = key;
+  };
+
+  const handleColumnDragOver = (e: React.DragEvent, key: string) => {
+    e.preventDefault();
+    setDragOverColumn(key);
+  };
+
+  const handleColumnDrop = (key: string) => {
+    const from = dragColumnRef.current;
+    if (from && from !== key) {
+      const newOrder = [...columnOrder];
+      const fromIndex = newOrder.indexOf(from);
+      const toIndex = newOrder.indexOf(key);
+      newOrder.splice(fromIndex, 1);
+      newOrder.splice(toIndex, 0, from);
+      setColumnOrder(newOrder);
+    }
+    dragColumnRef.current = null;
+    setDragOverColumn(null);
+  };
+
+  const handleColumnDragEnd = () => {
+    dragColumnRef.current = null;
+    setDragOverColumn(null);
   };
 
   const toggleSort = (column: string) => {
@@ -623,7 +850,52 @@ function LeadsPage() {
         query = query.eq('assigned_to', assignedFilter);
       }
     }
+    if (excludeDeal) {
+      query = query.or('hs_deal_exists.is.null,hs_deal_exists.eq.false');
+    }
+    if (excludeHasNextActivity) {
+      query = query.is('next_activity_date', null);
+    }
     return query;
+  };
+
+  const fetchAllMatchingLeads = async (): Promise<Lead[]> => {
+    const batchSize = 1000;
+    let allLeads: Lead[] = [];
+    let from = 0;
+    while (true) {
+      let query = supabase.from('leads').select('*');
+      if (debouncedSearch) {
+        query = query.or(
+          `company_name.ilike.%${debouncedSearch}%,contact_name.ilike.%${debouncedSearch}%,phone.ilike.%${debouncedSearch}%`
+        );
+      }
+      if (statusFilter !== 'all') {
+        query = query.eq('status', statusFilter);
+      }
+      for (const s of excludedStatuses) {
+        query = query.neq('status', s);
+      }
+      if (assignedFilter !== 'all') {
+        if (assignedFilter === 'unassigned') {
+          query = query.is('assigned_to', null);
+        } else {
+          query = query.eq('assigned_to', assignedFilter);
+        }
+      }
+      if (excludeDeal) {
+        query = query.or('hs_deal_exists.is.null,hs_deal_exists.eq.false');
+      }
+      if (excludeHasNextActivity) {
+        query = query.is('next_activity_date', null);
+      }
+      const { data } = await query.range(from, from + batchSize - 1);
+      if (!data || data.length === 0) break;
+      allLeads = allLeads.concat(data);
+      if (data.length < batchSize) break;
+      from += batchSize;
+    }
+    return allLeads;
   };
 
   const handleBulkAssign = async () => {
@@ -721,7 +993,23 @@ function LeadsPage() {
       contact_name: row['担当者名'] || row['contact_name'] || '',
       email: row['メールアドレス'] || row['email'] || '',
       homepage: row['HP'] || row['homepage'] || row['URL'] || '',
-      lead_source: row['流入経路'] || row['lead_source'] || '',
+      lead_source: (() => {
+        const raw = row['流入経路'] || row['lead_source'] || '';
+        if (Object.keys(LEAD_SOURCE_LABELS).includes(raw)) return raw;
+        const mapping: Record<string, string> = {
+          '過去問い合わせ': 'past_inquiry', '問い合わせ': 'past_inquiry', 'inquiry': 'past_inquiry',
+          '失注': 'lost_deal', '失注案件': 'lost_deal',
+          'ターゲット': 'target_list', 'ターゲットリスト': 'target_list', '検索追加': 'target_list',
+          'セミナー': 'seminar', 'イベント': 'seminar', 'EXPO': 'seminar',
+          '紹介': 'referral',
+          'インバウンド': 'inbound', 'Web': 'inbound', 'HP': 'inbound',
+          '外部リスト': 'external_list', '購入リスト': 'external_list',
+        };
+        for (const [k, v] of Object.entries(mapping)) {
+          if (raw.includes(k)) return v;
+        }
+        return raw ? 'other' : '';
+      })(),
       inquiry_date: row['問い合わせ日'] || row['inquiry_date'] || null,
       inquiry_content: row['問い合わせ内容'] || row['inquiry_content'] || '',
       status: 'new' as const,
@@ -756,7 +1044,18 @@ function LeadsPage() {
       dupEmails = new Set((existingByEmail || []).map(r => r.email));
     }
 
-    const newLeads = validLeads.filter(l => !dupNames.has(l.company_name) && (!l.email || !dupEmails.has(l.email)));
+    // Check duplicates by phone
+    const phones = validLeads.map(l => l.phone).filter(p => p);
+    let dupPhones = new Set<string>();
+    if (phones.length > 0) {
+      const { data: existingByPhone } = await supabase
+        .from('leads')
+        .select('phone')
+        .in('phone', phones);
+      dupPhones = new Set((existingByPhone || []).map(r => r.phone));
+    }
+
+    const newLeads = validLeads.filter(l => !dupNames.has(l.company_name) && (!l.email || !dupEmails.has(l.email)) && (!l.phone || !dupPhones.has(l.phone)));
     const skipped = validLeads.length - newLeads.length;
 
     if (skipped > 0 && newLeads.length === 0) {
@@ -781,7 +1080,7 @@ function LeadsPage() {
     loadLeads();
   };
 
-  const checkDuplicate = async (companyName: string, email: string): Promise<string | null> => {
+  const checkDuplicate = async (companyName: string, email: string, phone?: string): Promise<string | null> => {
     const { data: byName } = await supabase
       .from('leads')
       .select('id, company_name')
@@ -800,6 +1099,16 @@ function LeadsPage() {
         return `メールアドレス「${email}」は「${byEmail[0].company_name}」で既に登録されています。`;
       }
     }
+    if (phone) {
+      const { data: byPhone } = await supabase
+        .from('leads')
+        .select('id, company_name, phone')
+        .eq('phone', phone)
+        .limit(1);
+      if (byPhone && byPhone.length > 0) {
+        return `電話番号「${phone}」は「${byPhone[0].company_name}」で既に登録されています。`;
+      }
+    }
     return null;
   };
 
@@ -807,7 +1116,7 @@ function LeadsPage() {
     if (!addForm.company_name || !addForm.phone) return;
     setAdding(true);
 
-    const dupMsg = await checkDuplicate(addForm.company_name, addForm.email);
+    const dupMsg = await checkDuplicate(addForm.company_name, addForm.email, addForm.phone);
     if (dupMsg) {
       if (!window.confirm(`${dupMsg}\nそれでも追加しますか？`)) {
         setAdding(false);
@@ -905,6 +1214,331 @@ function LeadsPage() {
         {displayValue || '-'}
       </span>
     );
+  };
+
+  // Render a single cell by column key
+  const renderCell = (lead: Lead, colKey: string) => {
+    switch (colKey) {
+      case 'company_name':
+        return (
+          <td key={colKey} className="py-2 px-3 text-sm font-medium text-gray-800">
+            {renderEditableText(lead, 'company_name', lead.company_name)}
+          </td>
+        );
+      case 'contact_name':
+        return (
+          <td key={colKey} className="py-2 px-3 text-sm text-gray-600">
+            {renderEditableText(lead, 'contact_name', lead.contact_name || '')}
+          </td>
+        );
+      case 'phone':
+        return (
+          <td key={colKey} className="py-2 px-3 text-sm text-gray-600">
+            {renderEditableText(lead, 'phone', lead.phone)}
+          </td>
+        );
+      case 'email':
+        return (
+          <td key={colKey} className="py-2 px-3 text-sm text-gray-600">
+            {renderEditableText(lead, 'email', lead.email || '')}
+          </td>
+        );
+      case 'homepage':
+        return (
+          <td key={colKey} className="py-2 px-3 text-sm text-gray-600">
+            {isEditing(lead.id, 'homepage') ? (
+              <input
+                type="text"
+                value={editCellValue}
+                onChange={(e) => setEditCellValue(e.target.value)}
+                onBlur={() => saveCell(lead.id, 'homepage')}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') saveCell(lead.id, 'homepage');
+                  if (e.key === 'Escape') cancelEditCell();
+                }}
+                autoFocus
+                className="w-full px-1 py-0.5 border border-blue-400 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+                onClick={(e) => e.stopPropagation()}
+              />
+            ) : lead.homepage ? (
+              <span className="flex items-center gap-1">
+                <a
+                  href={lead.homepage.startsWith('http') ? lead.homepage : `https://${lead.homepage}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  className="text-blue-600 hover:underline truncate max-w-[120px] inline-block"
+                >
+                  {lead.homepage.replace(/^https?:\/\//, '').replace(/\/$/, '')}
+                </a>
+                <button
+                  onClick={(e) => { e.stopPropagation(); startEditCell(lead.id, 'homepage', lead.homepage || ''); }}
+                  className="text-gray-400 hover:text-blue-600 flex-shrink-0"
+                >
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+                </button>
+              </span>
+            ) : (
+              <span
+                className="cursor-text hover:bg-blue-50 px-1 py-0.5 rounded -mx-1 block text-gray-400"
+                onClick={(e) => { e.stopPropagation(); startEditCell(lead.id, 'homepage', ''); }}
+              >
+                -
+              </span>
+            )}
+          </td>
+        );
+      case 'lead_source':
+        return (
+          <td key={colKey} className="py-2 px-3 text-sm text-gray-600" onClick={(e) => e.stopPropagation()}>
+            {editingCell === `${lead.id}-lead_source` ? (
+              <select
+                value={editCellValue}
+                onChange={(e) => setEditCellValue(e.target.value)}
+                onBlur={() => saveCell(lead.id, 'lead_source')}
+                autoFocus
+                className="px-1 py-0.5 border border-blue-400 rounded text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+              >
+                {Object.entries(LEAD_SOURCE_LABELS).map(([k, v]) => (
+                  <option key={k} value={k}>{v}</option>
+                ))}
+              </select>
+            ) : (
+              <span
+                onClick={() => startEditCell(lead.id, 'lead_source', lead.lead_source || '')}
+                className={`cursor-pointer inline-block px-2 py-0.5 rounded-full text-xs font-medium ${LEAD_SOURCE_COLORS[(lead.lead_source || '') as LeadSource] || 'bg-gray-50 text-gray-400'}`}
+              >
+                {LEAD_SOURCE_LABELS[(lead.lead_source || '') as LeadSource] || lead.lead_source || '未設定'}
+              </span>
+            )}
+          </td>
+        );
+      case 'inquiry_date':
+        return (
+          <td key={colKey} className="py-2 px-3 text-sm" onClick={(e) => e.stopPropagation()}>
+            {isEditing(lead.id, 'inquiry_date') ? (
+              <input
+                type="date"
+                value={editCellValue}
+                onChange={(e) => setEditCellValue(e.target.value)}
+                onBlur={() => saveCell(lead.id, 'inquiry_date')}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') saveCell(lead.id, 'inquiry_date');
+                  if (e.key === 'Escape') cancelEditCell();
+                }}
+                autoFocus
+                className="px-1 py-0.5 border border-blue-400 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+              />
+            ) : (
+              <span
+                className="cursor-text hover:bg-blue-50 px-1 py-0.5 rounded -mx-1 block text-gray-600"
+                onClick={() => startEditCell(lead.id, 'inquiry_date', lead.inquiry_date || '')}
+              >
+                {lead.inquiry_date
+                  ? new Date(lead.inquiry_date).toLocaleDateString('ja-JP', { year: 'numeric', month: 'numeric', day: 'numeric' })
+                  : '-'}
+              </span>
+            )}
+          </td>
+        );
+      case 'inquiry_content':
+        return (
+          <td key={colKey} className="py-2 px-3 text-sm text-gray-500 max-w-[150px]">
+            {isEditing(lead.id, 'inquiry_content') ? (
+              <input
+                type="text"
+                value={editCellValue}
+                onChange={(e) => setEditCellValue(e.target.value)}
+                onBlur={() => saveCell(lead.id, 'inquiry_content')}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') saveCell(lead.id, 'inquiry_content');
+                  if (e.key === 'Escape') cancelEditCell();
+                }}
+                autoFocus
+                className="w-full px-1 py-0.5 border border-blue-400 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+                onClick={(e) => e.stopPropagation()}
+              />
+            ) : (
+              <span
+                className="cursor-text hover:bg-blue-50 px-1 py-0.5 rounded -mx-1 block truncate"
+                onClick={(e) => { e.stopPropagation(); startEditCell(lead.id, 'inquiry_content', lead.inquiry_content || ''); }}
+                title={lead.inquiry_content || ''}
+              >
+                {lead.inquiry_content || '-'}
+              </span>
+            )}
+          </td>
+        );
+      case 'hs_deal_exists':
+        return (
+          <td key={colKey} className="py-2 px-3 text-center">
+            {lead.hs_deal_exists === null ? (
+              <span className="text-gray-300 text-xs">-</span>
+            ) : lead.hs_deal_exists ? (
+              <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-100 text-red-700">商談済</span>
+            ) : (
+              <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-700">未商談</span>
+            )}
+          </td>
+        );
+      case 'hs_deal_owner':
+        return (
+          <td key={colKey} className="py-2 px-3 text-xs text-gray-700 whitespace-nowrap">
+            {lead.hs_deal_exists ? (lead.hs_deal_owner || '-') : '-'}
+          </td>
+        );
+      case 'hs_deal_created_at':
+        return (
+          <td key={colKey} className="py-2 px-3 text-xs text-gray-700 whitespace-nowrap">
+            {lead.hs_deal_exists && lead.hs_deal_created_at
+              ? new Date(lead.hs_deal_created_at).toLocaleDateString('ja-JP')
+              : '-'}
+          </td>
+        );
+      case 'priority':
+        return (
+          <td key={colKey} className="py-2 px-3" onClick={(e) => e.stopPropagation()}>
+            {isEditing(lead.id, 'priority') ? (
+              <select
+                value={editCellValue}
+                onChange={(e) => { setEditCellValue(e.target.value); }}
+                onBlur={() => saveCell(lead.id, 'priority')}
+                autoFocus
+                className="px-1 py-0.5 border border-blue-400 rounded text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+              >
+                <option value="">-</option>
+                {PRIORITY_OPTIONS.map((p) => (
+                  <option key={p} value={p}>{p}</option>
+                ))}
+              </select>
+            ) : (
+              <span
+                className={`inline-block px-2 py-0.5 rounded text-xs font-medium cursor-pointer hover:opacity-80 ${lead.priority ? PRIORITY_COLORS[lead.priority] : 'text-gray-400'}`}
+                onClick={() => startEditCell(lead.id, 'priority', lead.priority || '')}
+              >
+                {lead.priority || '-'}
+              </span>
+            )}
+          </td>
+        );
+      case 'status':
+        return (
+          <td key={colKey} className="py-2 px-3" onClick={(e) => e.stopPropagation()}>
+            {isEditing(lead.id, 'status') ? (
+              <select
+                value={editCellValue}
+                onChange={(e) => { setEditCellValue(e.target.value); }}
+                onBlur={() => saveCell(lead.id, 'status')}
+                autoFocus
+                className="px-1 py-0.5 border border-blue-400 rounded text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+              >
+                {Object.entries(LEAD_STATUS_LABELS).map(([key, label]) => (
+                  <option key={key} value={key}>{label}</option>
+                ))}
+              </select>
+            ) : (
+              <span
+                className={`inline-block px-2 py-1 rounded-full text-xs font-medium cursor-pointer hover:opacity-80 ${LEAD_STATUS_COLORS[lead.status]}`}
+                onClick={() => startEditCell(lead.id, 'status', lead.status)}
+              >
+                {LEAD_STATUS_LABELS[lead.status]}
+              </span>
+            )}
+          </td>
+        );
+      case 'next_activity_date':
+        return (
+          <td key={colKey} className="py-2 px-3 text-sm" onClick={(e) => e.stopPropagation()}>
+            {isEditing(lead.id, 'next_activity_date') ? (
+              <input
+                type="date"
+                value={editCellValue}
+                onChange={(e) => setEditCellValue(e.target.value)}
+                onBlur={() => saveCell(lead.id, 'next_activity_date')}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') saveCell(lead.id, 'next_activity_date');
+                  if (e.key === 'Escape') cancelEditCell();
+                }}
+                autoFocus
+                className="px-1 py-0.5 border border-blue-400 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+              />
+            ) : (
+              <span
+                className={`cursor-text hover:bg-blue-50 px-1 py-0.5 rounded -mx-1 block ${
+                  lead.next_activity_date
+                    ? new Date(lead.next_activity_date) < new Date(new Date().toDateString())
+                      ? 'text-red-600 font-medium'
+                      : new Date(lead.next_activity_date).toDateString() === new Date().toDateString()
+                      ? 'text-amber-600 font-medium'
+                      : 'text-gray-600'
+                    : 'text-gray-400'
+                }`}
+                onClick={() => startEditCell(lead.id, 'next_activity_date', lead.next_activity_date || '')}
+              >
+                {lead.next_activity_date
+                  ? new Date(lead.next_activity_date).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' })
+                  : '-'}
+              </span>
+            )}
+          </td>
+        );
+      case 'assigned_to':
+        return (
+          <td key={colKey} className="py-2 px-3 text-sm" onClick={(e) => e.stopPropagation()}>
+            {isEditing(lead.id, 'assigned_to') ? (
+              <select
+                value={editCellValue}
+                onChange={(e) => setEditCellValue(e.target.value)}
+                onBlur={() => saveCell(lead.id, 'assigned_to')}
+                autoFocus
+                className="px-1 py-0.5 border border-blue-400 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+              >
+                <option value="">未割当</option>
+                {profiles.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            ) : (
+              <span
+                className="cursor-text hover:bg-blue-50 px-1 py-0.5 rounded -mx-1 block text-gray-600"
+                onClick={() => startEditCell(lead.id, 'assigned_to', lead.assigned_to || '')}
+              >
+                {profileMap.get(lead.assigned_to || '') || '未割当'}
+              </span>
+            )}
+          </td>
+        );
+      case 'memo':
+        return (
+          <td key={colKey} className="py-2 px-3 text-sm text-gray-500 max-w-[150px]">
+            {isEditing(lead.id, 'memo') ? (
+              <input
+                type="text"
+                value={editCellValue}
+                onChange={(e) => setEditCellValue(e.target.value)}
+                onBlur={() => saveCell(lead.id, 'memo')}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') saveCell(lead.id, 'memo');
+                  if (e.key === 'Escape') cancelEditCell();
+                }}
+                autoFocus
+                className="w-full px-1 py-0.5 border border-blue-400 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+                onClick={(e) => e.stopPropagation()}
+              />
+            ) : (
+              <span
+                className="cursor-text hover:bg-blue-50 px-1 py-0.5 rounded -mx-1 block truncate"
+                onClick={(e) => { e.stopPropagation(); startEditCell(lead.id, 'memo', lead.memo || ''); }}
+                title={lead.memo || ''}
+              >
+                {lead.memo || '-'}
+              </span>
+            )}
+          </td>
+        );
+      default:
+        return <td key={colKey} className="py-2 px-3 text-sm text-gray-400">-</td>;
+    }
   };
 
   return (
@@ -1009,6 +1643,26 @@ function LeadsPage() {
                 {bulkClassifying ? bulkClassifyProgress : 'AI優先度判定'}
               </button>
               <span className="text-gray-300">|</span>
+              <div className="flex items-center gap-1">
+                <select
+                  value={bulkEmailTemplateType}
+                  onChange={(e) => setBulkEmailTemplateType(e.target.value as typeof bulkEmailTemplateType)}
+                  className="px-2 py-1 text-xs border border-blue-400 rounded bg-white"
+                >
+                  <option value="reapproach">再アプローチ</option>
+                  <option value="initial">初回</option>
+                  <option value="followup">フォローアップ</option>
+                  <option value="appointment">アポイント</option>
+                </select>
+                <button
+                  onClick={handleBulkEmailGenerate}
+                  disabled={bulkEmailGenerating}
+                  className="px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {bulkEmailGenerating ? bulkEmailGenerateProgress : 'メール一括生成'}
+                </button>
+              </div>
+              <span className="text-gray-300">|</span>
               <button
                 onClick={handleBulkDelete}
                 className="px-3 py-1 bg-red-600 text-white text-sm rounded hover:bg-red-700"
@@ -1045,8 +1699,8 @@ function LeadsPage() {
               <span>
                 {statusFilter !== 'all'
                   ? LEAD_STATUS_LABELS[statusFilter]
-                  : excludedStatuses.size > 0
-                    ? `${excludedStatuses.size}件除外中`
+                  : (excludedStatuses.size > 0 || excludeDeal || excludeHasNextActivity)
+                    ? `${excludedStatuses.size + (excludeDeal ? 1 : 0) + (excludeHasNextActivity ? 1 : 0)}件除外中`
                     : '全てのステータス'}
               </span>
               <svg className="w-4 h-4 ml-auto text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1058,8 +1712,8 @@ function LeadsPage() {
                 <div className="fixed inset-0 z-10" onClick={() => setShowStatusDropdown(false)} />
                 <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-20 min-w-[220px] py-1">
                   <button
-                    onClick={() => { setStatusFilter('all'); setExcludedStatuses(new Set()); setPage(0); setShowStatusDropdown(false); }}
-                    className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 ${statusFilter === 'all' && excludedStatuses.size === 0 ? 'font-medium text-blue-600' : ''}`}
+                    onClick={() => { setStatusFilter('all'); setExcludedStatuses(new Set()); setExcludeDeal(false); setExcludeHasNextActivity(false); setPage(0); setShowStatusDropdown(false); }}
+                    className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 ${statusFilter === 'all' && excludedStatuses.size === 0 && !excludeDeal && !excludeHasNextActivity ? 'font-medium text-blue-600' : ''}`}
                   >
                     全てのステータス
                   </button>
@@ -1076,6 +1730,24 @@ function LeadsPage() {
                   ))}
                   <div className="border-t border-gray-100 my-1" />
                   <p className="px-3 py-1 text-xs text-gray-400">除外（チェックで除外）</p>
+                  <label className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-gray-50 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={excludeDeal}
+                      onChange={() => { setExcludeDeal(!excludeDeal); setPage(0); }}
+                      className="rounded border-gray-300"
+                    />
+                    <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">商談済み</span>
+                  </label>
+                  <label className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-gray-50 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={excludeHasNextActivity}
+                      onChange={() => { setExcludeHasNextActivity(!excludeHasNextActivity); setPage(0); }}
+                      className="rounded border-gray-300"
+                    />
+                    <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-teal-100 text-teal-700">次回予定あり</span>
+                  </label>
                   {Object.entries(LEAD_STATUS_LABELS).map(([key, label]) => (
                     <label
                       key={`exclude-${key}`}
@@ -1146,30 +1818,20 @@ function LeadsPage() {
                           className="rounded border-gray-300"
                         />
                       </th>
-                      {[
-                        { key: 'company_name', label: '会社名' },
-                        { key: 'contact_name', label: '担当者名' },
-                        { key: 'phone', label: '電話番号' },
-                        { key: 'email', label: 'メール' },
-                        { key: 'homepage', label: 'HP' },
-                        { key: 'lead_source', label: '流入経路' },
-                        { key: 'inquiry_date', label: '問い合わせ日' },
-                        { key: 'inquiry_content', label: '問い合わせ内容' },
-                        { key: 'hs_deal_exists', label: '商談' },
-                        { key: 'hs_deal_owner', label: '商談担当' },
-                        { key: 'hs_deal_created_at', label: '取引作成日' },
-                        { key: 'priority', label: '優先度' },
-                        { key: 'status', label: 'ステータス' },
-                        { key: 'next_activity_date', label: '次回予定' },
-                        { key: 'assigned_to', label: '担当' },
-                        { key: 'memo', label: 'メモ' },
-                      ].map(({ key, label }) => (
+                      {columnOrder.map((key) => (
                         <th
                           key={key}
+                          draggable
+                          onDragStart={() => handleColumnDragStart(key)}
+                          onDragOver={(e) => handleColumnDragOver(e, key)}
+                          onDrop={() => handleColumnDrop(key)}
+                          onDragEnd={handleColumnDragEnd}
                           onClick={() => toggleSort(key)}
-                          className="text-left py-3 px-3 text-sm font-medium text-gray-500 cursor-pointer hover:text-gray-700 select-none bg-gray-50"
+                          className={`text-left py-3 px-3 text-sm font-medium text-gray-500 cursor-grab hover:text-gray-700 select-none bg-gray-50 ${
+                            dragOverColumn === key ? 'border-l-2 border-blue-400' : ''
+                          }`}
                         >
-                          {label}
+                          {COLUMN_LABELS[key] || key}
                           {sortColumn === key ? (sortAscending ? ' ▲' : ' ▼') : ''}
                         </th>
                       ))}
@@ -1193,272 +1855,7 @@ function LeadsPage() {
                             className="rounded border-gray-300"
                           />
                         </td>
-                        {/* Company name */}
-                        <td className="py-2 px-3 text-sm font-medium text-gray-800">
-                          {renderEditableText(lead, 'company_name', lead.company_name)}
-                        </td>
-                        {/* Contact name */}
-                        <td className="py-2 px-3 text-sm text-gray-600">
-                          {renderEditableText(lead, 'contact_name', lead.contact_name || '')}
-                        </td>
-                        {/* Phone */}
-                        <td className="py-2 px-3 text-sm text-gray-600">
-                          {renderEditableText(lead, 'phone', lead.phone)}
-                        </td>
-                        {/* Email */}
-                        <td className="py-2 px-3 text-sm text-gray-600">
-                          {renderEditableText(lead, 'email', lead.email || '')}
-                        </td>
-                        {/* Homepage */}
-                        <td className="py-2 px-3 text-sm text-gray-600">
-                          {isEditing(lead.id, 'homepage') ? (
-                            <input
-                              type="text"
-                              value={editCellValue}
-                              onChange={(e) => setEditCellValue(e.target.value)}
-                              onBlur={() => saveCell(lead.id, 'homepage')}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') saveCell(lead.id, 'homepage');
-                                if (e.key === 'Escape') cancelEditCell();
-                              }}
-                              autoFocus
-                              className="w-full px-1 py-0.5 border border-blue-400 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
-                              onClick={(e) => e.stopPropagation()}
-                            />
-                          ) : lead.homepage ? (
-                            <span className="flex items-center gap-1">
-                              <a
-                                href={lead.homepage.startsWith('http') ? lead.homepage : `https://${lead.homepage}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                onClick={(e) => e.stopPropagation()}
-                                className="text-blue-600 hover:underline truncate max-w-[120px] inline-block"
-                              >
-                                {lead.homepage.replace(/^https?:\/\//, '').replace(/\/$/, '')}
-                              </a>
-                              <button
-                                onClick={(e) => { e.stopPropagation(); startEditCell(lead.id, 'homepage', lead.homepage || ''); }}
-                                className="text-gray-400 hover:text-blue-600 flex-shrink-0"
-                              >
-                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
-                              </button>
-                            </span>
-                          ) : (
-                            <span
-                              className="cursor-text hover:bg-blue-50 px-1 py-0.5 rounded -mx-1 block text-gray-400"
-                              onClick={(e) => { e.stopPropagation(); startEditCell(lead.id, 'homepage', ''); }}
-                            >
-                              -
-                            </span>
-                          )}
-                        </td>
-                        {/* Lead source */}
-                        <td className="py-2 px-3 text-sm text-gray-600">
-                          {renderEditableText(lead, 'lead_source', lead.lead_source || '')}
-                        </td>
-                        {/* Inquiry date */}
-                        <td className="py-2 px-3 text-sm" onClick={(e) => e.stopPropagation()}>
-                          {isEditing(lead.id, 'inquiry_date') ? (
-                            <input
-                              type="date"
-                              value={editCellValue}
-                              onChange={(e) => setEditCellValue(e.target.value)}
-                              onBlur={() => saveCell(lead.id, 'inquiry_date')}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') saveCell(lead.id, 'inquiry_date');
-                                if (e.key === 'Escape') cancelEditCell();
-                              }}
-                              autoFocus
-                              className="px-1 py-0.5 border border-blue-400 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
-                            />
-                          ) : (
-                            <span
-                              className="cursor-text hover:bg-blue-50 px-1 py-0.5 rounded -mx-1 block text-gray-600"
-                              onClick={() => startEditCell(lead.id, 'inquiry_date', lead.inquiry_date || '')}
-                            >
-                              {lead.inquiry_date
-                                ? new Date(lead.inquiry_date).toLocaleDateString('ja-JP', { year: 'numeric', month: 'numeric', day: 'numeric' })
-                                : '-'}
-                            </span>
-                          )}
-                        </td>
-                        {/* Inquiry content */}
-                        <td className="py-2 px-3 text-sm text-gray-500 max-w-[150px]">
-                          {isEditing(lead.id, 'inquiry_content') ? (
-                            <input
-                              type="text"
-                              value={editCellValue}
-                              onChange={(e) => setEditCellValue(e.target.value)}
-                              onBlur={() => saveCell(lead.id, 'inquiry_content')}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') saveCell(lead.id, 'inquiry_content');
-                                if (e.key === 'Escape') cancelEditCell();
-                              }}
-                              autoFocus
-                              className="w-full px-1 py-0.5 border border-blue-400 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
-                              onClick={(e) => e.stopPropagation()}
-                            />
-                          ) : (
-                            <span
-                              className="cursor-text hover:bg-blue-50 px-1 py-0.5 rounded -mx-1 block truncate"
-                              onClick={(e) => { e.stopPropagation(); startEditCell(lead.id, 'inquiry_content', lead.inquiry_content || ''); }}
-                              title={lead.inquiry_content || ''}
-                            >
-                              {lead.inquiry_content || '-'}
-                            </span>
-                          )}
-                        </td>
-                        {/* HubSpot Deal */}
-                        <td className="py-2 px-3 text-center">
-                          {lead.hs_deal_exists === null ? (
-                            <span className="text-gray-300 text-xs">-</span>
-                          ) : lead.hs_deal_exists ? (
-                            <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-100 text-red-700">商談済</span>
-                          ) : (
-                            <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-700">未商談</span>
-                          )}
-                        </td>
-                        {/* HubSpot Deal Owner */}
-                        <td className="py-2 px-3 text-xs text-gray-700 whitespace-nowrap">
-                          {lead.hs_deal_exists ? (lead.hs_deal_owner || '-') : '-'}
-                        </td>
-                        {/* HubSpot Deal Created At */}
-                        <td className="py-2 px-3 text-xs text-gray-700 whitespace-nowrap">
-                          {lead.hs_deal_exists && lead.hs_deal_created_at
-                            ? new Date(lead.hs_deal_created_at).toLocaleDateString('ja-JP')
-                            : '-'}
-                        </td>
-                        {/* Priority */}
-                        <td className="py-2 px-3" onClick={(e) => e.stopPropagation()}>
-                          {isEditing(lead.id, 'priority') ? (
-                            <select
-                              value={editCellValue}
-                              onChange={(e) => { setEditCellValue(e.target.value); }}
-                              onBlur={() => saveCell(lead.id, 'priority')}
-                              autoFocus
-                              className="px-1 py-0.5 border border-blue-400 rounded text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
-                            >
-                              <option value="">-</option>
-                              {PRIORITY_OPTIONS.map((p) => (
-                                <option key={p} value={p}>{p}</option>
-                              ))}
-                            </select>
-                          ) : (
-                            <span
-                              className={`inline-block px-2 py-0.5 rounded text-xs font-medium cursor-pointer hover:opacity-80 ${lead.priority ? PRIORITY_COLORS[lead.priority] : 'text-gray-400'}`}
-                              onClick={() => startEditCell(lead.id, 'priority', lead.priority || '')}
-                            >
-                              {lead.priority || '-'}
-                            </span>
-                          )}
-                        </td>
-                        {/* Status */}
-                        <td className="py-2 px-3" onClick={(e) => e.stopPropagation()}>
-                          {isEditing(lead.id, 'status') ? (
-                            <select
-                              value={editCellValue}
-                              onChange={(e) => { setEditCellValue(e.target.value); }}
-                              onBlur={() => saveCell(lead.id, 'status')}
-                              autoFocus
-                              className="px-1 py-0.5 border border-blue-400 rounded text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
-                            >
-                              {Object.entries(LEAD_STATUS_LABELS).map(([key, label]) => (
-                                <option key={key} value={key}>{label}</option>
-                              ))}
-                            </select>
-                          ) : (
-                            <span
-                              className={`inline-block px-2 py-1 rounded-full text-xs font-medium cursor-pointer hover:opacity-80 ${LEAD_STATUS_COLORS[lead.status]}`}
-                              onClick={() => startEditCell(lead.id, 'status', lead.status)}
-                            >
-                              {LEAD_STATUS_LABELS[lead.status]}
-                            </span>
-                          )}
-                        </td>
-                        {/* Next activity date */}
-                        <td className="py-2 px-3 text-sm" onClick={(e) => e.stopPropagation()}>
-                          {isEditing(lead.id, 'next_activity_date') ? (
-                            <input
-                              type="date"
-                              value={editCellValue}
-                              onChange={(e) => setEditCellValue(e.target.value)}
-                              onBlur={() => saveCell(lead.id, 'next_activity_date')}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') saveCell(lead.id, 'next_activity_date');
-                                if (e.key === 'Escape') cancelEditCell();
-                              }}
-                              autoFocus
-                              className="px-1 py-0.5 border border-blue-400 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
-                            />
-                          ) : (
-                            <span
-                              className={`cursor-text hover:bg-blue-50 px-1 py-0.5 rounded -mx-1 block ${
-                                lead.next_activity_date
-                                  ? new Date(lead.next_activity_date) < new Date(new Date().toDateString())
-                                    ? 'text-red-600 font-medium'
-                                    : new Date(lead.next_activity_date).toDateString() === new Date().toDateString()
-                                    ? 'text-amber-600 font-medium'
-                                    : 'text-gray-600'
-                                  : 'text-gray-400'
-                              }`}
-                              onClick={() => startEditCell(lead.id, 'next_activity_date', lead.next_activity_date || '')}
-                            >
-                              {lead.next_activity_date
-                                ? new Date(lead.next_activity_date).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' })
-                                : '-'}
-                            </span>
-                          )}
-                        </td>
-                        {/* Assigned to */}
-                        <td className="py-2 px-3 text-sm" onClick={(e) => e.stopPropagation()}>
-                          {isEditing(lead.id, 'assigned_to') ? (
-                            <select
-                              value={editCellValue}
-                              onChange={(e) => setEditCellValue(e.target.value)}
-                              onBlur={() => saveCell(lead.id, 'assigned_to')}
-                              autoFocus
-                              className="px-1 py-0.5 border border-blue-400 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
-                            >
-                              <option value="">未割当</option>
-                              {profiles.map((p) => (
-                                <option key={p.id} value={p.id}>{p.name}</option>
-                              ))}
-                            </select>
-                          ) : (
-                            <span
-                              className="cursor-text hover:bg-blue-50 px-1 py-0.5 rounded -mx-1 block text-gray-600"
-                              onClick={() => startEditCell(lead.id, 'assigned_to', lead.assigned_to || '')}
-                            >
-                              {profileMap.get(lead.assigned_to || '') || '未割当'}
-                            </span>
-                          )}
-                        </td>
-                        {/* Memo */}
-                        <td className="py-2 px-3 text-sm text-gray-500 max-w-[150px]">
-                          {isEditing(lead.id, 'memo') ? (
-                            <input
-                              type="text"
-                              value={editCellValue}
-                              onChange={(e) => setEditCellValue(e.target.value)}
-                              onBlur={() => saveCell(lead.id, 'memo')}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') saveCell(lead.id, 'memo');
-                                if (e.key === 'Escape') cancelEditCell();
-                              }}
-                              autoFocus
-                              className="w-full px-1 py-0.5 border border-blue-400 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
-                              onClick={(e) => e.stopPropagation()}
-                            />
-                          ) : (
-                            <span
-                              className="cursor-text hover:bg-blue-50 px-1 py-0.5 rounded -mx-1 block truncate"
-                              onClick={(e) => { e.stopPropagation(); startEditCell(lead.id, 'memo', lead.memo || ''); }}
-                              title={lead.memo || ''}
-                            >
-                              {lead.memo || '-'}
-                            </span>
-                          )}
-                        </td>
+                        {columnOrder.map((colKey) => renderCell(lead, colKey))}
                       </tr>
                     ))}
                   </tbody>
@@ -1546,7 +1943,7 @@ function LeadsPage() {
                     {selectedLead.homepage.replace(/^https?:\/\//, '').replace(/\/$/, '')}
                   </a>
                 )}
-                <p className="text-xs text-gray-600">流入経路: {selectedLead.lead_source || '-'}</p>
+                <p className="text-xs text-gray-600">流入経路: <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${LEAD_SOURCE_COLORS[(selectedLead.lead_source || '') as LeadSource] || 'bg-gray-50 text-gray-400'}`}>{LEAD_SOURCE_LABELS[(selectedLead.lead_source || '') as LeadSource] || selectedLead.lead_source || '-'}</span></p>
                 <p className="text-xs text-gray-600">問い合わせ日: {selectedLead.inquiry_date ? new Date(selectedLead.inquiry_date).toLocaleDateString('ja-JP') : '-'}</p>
                 <p className="text-xs text-gray-600">問い合わせ内容: {selectedLead.inquiry_content || '-'}</p>
                 {selectedLead.email && (
@@ -2039,13 +2436,15 @@ function LeadsPage() {
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">流入経路</label>
-                <input
-                  type="text"
+                <select
                   value={addForm.lead_source}
                   onChange={(e) => setAddForm({ ...addForm, lead_source: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-500 focus:border-transparent"
-                  placeholder="例: Web問い合わせ"
-                />
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-500 focus:border-transparent bg-white"
+                >
+                  {Object.entries(LEAD_SOURCE_LABELS).map(([k, v]) => (
+                    <option key={k} value={k}>{v}</option>
+                  ))}
+                </select>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">問い合わせ日</label>
@@ -2094,6 +2493,96 @@ function LeadsPage() {
               >
                 {adding ? '追加中...' : '追加'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Email Review Modal */}
+      {showBulkEmailModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => !bulkEmailSending && setShowBulkEmailModal(false)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-5xl max-h-[90vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-bold">メール一括送信レビュー</h3>
+                <p className="text-sm text-gray-500">
+                  {bulkEmails.filter(e => e.selected).length} / {bulkEmails.length} 件選択中
+                </p>
+              </div>
+              <div className="flex items-center gap-3">
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={bulkEmails.every(e => e.selected)}
+                    onChange={() => {
+                      const allSelected = bulkEmails.every(e => e.selected);
+                      setBulkEmails(prev => prev.map(e => ({ ...e, selected: !allSelected })));
+                    }}
+                    className="rounded border-gray-300"
+                  />
+                  全選択
+                </label>
+                <button
+                  onClick={() => setShowBulkEmailModal(false)}
+                  disabled={bulkEmailSending}
+                  className="px-3 py-1 text-sm text-gray-500 hover:text-gray-700"
+                >
+                  キャンセル
+                </button>
+                <button
+                  onClick={handleBulkEmailSend}
+                  disabled={bulkEmailSending || bulkEmails.filter(e => e.selected).length === 0}
+                  className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {bulkEmailSending ? bulkEmailSendProgress : `${bulkEmails.filter(e => e.selected).length}件送信`}
+                </button>
+              </div>
+            </div>
+            <div className="overflow-y-auto flex-1 p-4 space-y-3">
+              {bulkEmails.map((item, idx) => (
+                <div key={item.lead.id} className={`border rounded-lg p-4 ${item.selected ? 'border-blue-300 bg-blue-50/30' : 'border-gray-200 bg-gray-50/50'}`}>
+                  <div className="flex items-start gap-3">
+                    <input
+                      type="checkbox"
+                      checked={item.selected}
+                      onChange={() => {
+                        setBulkEmails(prev => prev.map((e, i) => i === idx ? { ...e, selected: !e.selected } : e));
+                      }}
+                      className="mt-1 rounded border-gray-300"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="text-sm font-bold text-gray-800">{item.lead.company_name}</span>
+                        <span className="text-xs text-gray-500">{item.lead.contact_name}</span>
+                        <span className="text-xs text-gray-400">{item.lead.email}</span>
+                      </div>
+                      {item.lead.inquiry_content && (
+                        <p className="text-xs text-gray-500 mb-2 bg-gray-100 rounded px-2 py-1">
+                          <span className="font-medium text-gray-600">問い合わせ: </span>{item.lead.inquiry_content}
+                        </p>
+                      )}
+                      <div className="mb-2">
+                        <label className="block text-xs text-gray-500 mb-1">件名</label>
+                        <input
+                          type="text"
+                          value={item.subject}
+                          onChange={(e) => setBulkEmails(prev => prev.map((em, i) => i === idx ? { ...em, subject: e.target.value } : em))}
+                          className="w-full px-3 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-500 mb-1">本文</label>
+                        <textarea
+                          value={item.body}
+                          onChange={(e) => setBulkEmails(prev => prev.map((em, i) => i === idx ? { ...em, body: e.target.value } : em))}
+                          rows={6}
+                          className="w-full px-3 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 resize-y"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         </div>

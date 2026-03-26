@@ -123,29 +123,82 @@ async function buildOwnerMap(token: string): Promise<Map<string, string>> {
   return map;
 }
 
-async function checkCompanyDeal(
-  companyName: string,
-  homepage: string,
-  token: string,
-  ownerMap: Map<string, string>
-): Promise<DealInfo> {
-  const noDeal: DealInfo = { exists: false, ownerName: '', createdAt: null, dealStage: '' };
+async function searchContactIds(
+  query: string,
+  token: string
+): Promise<string[]> {
+  // search APIで検索
+  const res = await fetch(`${HUBSPOT_API}/crm/v3/objects/contacts/search`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      query,
+      properties: ['firstname', 'lastname', 'email'],
+      limit: 10,
+    }),
+  });
 
-  let companyIds = await searchCompanyIds(companyName, token);
-
-  if (companyIds.length === 0) {
-    const domain = extractDomain(homepage);
-    if (domain) {
-      companyIds = await searchCompanyIds(domain, token);
-    }
+  if (res.ok) {
+    const data = await res.json();
+    const ids = (data.results || []).map((r: { id: string }) => r.id);
+    if (ids.length > 0) return ids;
   }
 
-  if (companyIds.length === 0) return noDeal;
+  return [];
+}
 
-  // Check all deals for qualified stage
+async function lookupContactByEmail(
+  email: string,
+  token: string
+): Promise<string | null> {
+  const res = await fetch(
+    `${HUBSPOT_API}/crm/v3/objects/contacts/${encodeURIComponent(email)}?idProperty=email`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  if (!res.ok) return null;
+  const data = await res.json();
+  return data.id || null;
+}
+
+async function getDealsForContact(
+  contactId: string,
+  token: string
+): Promise<{ dealname: string; hubspot_owner_id: string; createdate: string; dealstage: string }[]> {
+  const res = await fetch(`${HUBSPOT_API}/crm/v3/objects/deals/search`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      filterGroups: [{
+        filters: [{
+          propertyName: 'associations.contact',
+          operator: 'EQ',
+          value: contactId,
+        }],
+      }],
+      properties: ['dealname', 'hubspot_owner_id', 'createdate', 'dealstage'],
+      sorts: [{ propertyName: 'createdate', direction: 'DESCENDING' }],
+      limit: 20,
+    }),
+  });
+
+  if (!res.ok) return [];
+  const data = await res.json();
+  return (data.results || []).map((r: { properties: Record<string, string> }) => r.properties);
+}
+
+async function findQualifiedDeal(
+  companyIds: string[],
+  token: string,
+  ownerMap: Map<string, string>
+): Promise<DealInfo | null> {
   for (const companyId of companyIds) {
     const deals = await getDealsForCompany(companyId, token);
-    // Find the latest deal that has passed 関心喚起
     const qualifiedDeal = deals.find(d => QUALIFIED_STAGES.has(d.dealstage));
     if (qualifiedDeal) {
       return {
@@ -154,6 +207,70 @@ async function checkCompanyDeal(
         createdAt: qualifiedDeal.createdate || null,
         dealStage: qualifiedDeal.dealstage,
       };
+    }
+  }
+  return null;
+}
+
+async function checkCompanyDeal(
+  companyName: string,
+  homepage: string,
+  email: string,
+  contactName: string,
+  token: string,
+  ownerMap: Map<string, string>
+): Promise<DealInfo> {
+  const noDeal: DealInfo = { exists: false, ownerName: '', createdAt: null, dealStage: '' };
+
+  // 1. 会社名で検索
+  let companyIds = await searchCompanyIds(companyName, token);
+
+  // 2. ドメインで検索
+  if (companyIds.length === 0) {
+    const domain = extractDomain(homepage);
+    if (domain) {
+      companyIds = await searchCompanyIds(domain, token);
+    }
+  }
+
+  // 会社が見つかった場合、商談チェック
+  if (companyIds.length > 0) {
+    const result = await findQualifiedDeal(companyIds, token, ownerMap);
+    if (result) return result;
+  }
+
+  // 3. メールアドレスでコンタクト検索 → コンタクトに紐づく商談を直接検索
+  if (email) {
+    const directContactId = await lookupContactByEmail(email, token);
+    const contactIds = directContactId ? [directContactId] : await searchContactIds(email, token);
+    for (const contactId of contactIds) {
+      const deals = await getDealsForContact(contactId, token);
+      const qualifiedDeal = deals.find(d => QUALIFIED_STAGES.has(d.dealstage));
+      if (qualifiedDeal) {
+        return {
+          exists: true,
+          ownerName: ownerMap.get(qualifiedDeal.hubspot_owner_id) || '',
+          createdAt: qualifiedDeal.createdate || null,
+          dealStage: qualifiedDeal.dealstage,
+        };
+      }
+    }
+  }
+
+  // 4. 担当者名でコンタクト検索 → コンタクトに紐づく商談を直接検索
+  if (contactName) {
+    const contactIds = await searchContactIds(contactName, token);
+    for (const contactId of contactIds) {
+      const deals = await getDealsForContact(contactId, token);
+      const qualifiedDeal = deals.find(d => QUALIFIED_STAGES.has(d.dealstage));
+      if (qualifiedDeal) {
+        return {
+          exists: true,
+          ownerName: ownerMap.get(qualifiedDeal.hubspot_owner_id) || '',
+          createdAt: qualifiedDeal.createdate || null,
+          dealStage: qualifiedDeal.dealstage,
+        };
+      }
     }
   }
 
@@ -166,7 +283,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'HUBSPOT_TOKEN未設定' }, { status: 500 });
   }
 
-  const { lead_id, company_name, homepage } = await request.json();
+  const { lead_id, company_name, homepage, email, contact_name } = await request.json();
 
   if (!lead_id || !company_name) {
     return NextResponse.json({ error: 'lead_id and company_name required' }, { status: 400 });
@@ -174,7 +291,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const ownerMap = await buildOwnerMap(token);
-    const dealInfo = await checkCompanyDeal(company_name, homepage || '', token, ownerMap);
+    const dealInfo = await checkCompanyDeal(company_name, homepage || '', email || '', contact_name || '', token, ownerMap);
     const now = new Date().toISOString();
 
     const supabase = createAdminClient();

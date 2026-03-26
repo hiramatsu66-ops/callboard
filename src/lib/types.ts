@@ -137,6 +137,32 @@ export const CALL_RESULT_COLORS: Record<CallResult, string> = {
 export const EMAIL_RESULT_LABEL = 'メール送付';
 export const EMAIL_RESULT_COLOR = 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200';
 
+export type LeadSource = 'past_inquiry' | 'lost_deal' | 'target_list' | 'seminar' | 'referral' | 'inbound' | 'external_list' | 'other' | '';
+
+export const LEAD_SOURCE_LABELS: Record<LeadSource, string> = {
+  past_inquiry: '過去問い合わせ',
+  lost_deal: '失注案件',
+  target_list: 'ターゲットリスト',
+  seminar: 'セミナー・イベント',
+  referral: '紹介',
+  inbound: 'インバウンド',
+  external_list: '外部リスト',
+  other: 'その他',
+  '': '未設定',
+};
+
+export const LEAD_SOURCE_COLORS: Record<LeadSource, string> = {
+  past_inquiry: 'bg-blue-100 text-blue-800',
+  lost_deal: 'bg-red-100 text-red-800',
+  target_list: 'bg-purple-100 text-purple-800',
+  seminar: 'bg-green-100 text-green-800',
+  referral: 'bg-amber-100 text-amber-800',
+  inbound: 'bg-teal-100 text-teal-800',
+  external_list: 'bg-orange-100 text-orange-800',
+  other: 'bg-gray-100 text-gray-800',
+  '': 'bg-gray-50 text-gray-400',
+};
+
 export const PRIORITY_OPTIONS = ['A', 'B', 'C'] as const;
 export const PRIORITY_COLORS: Record<string, string> = {
   A: 'bg-red-100 text-red-800',
