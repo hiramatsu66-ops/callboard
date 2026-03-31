@@ -138,7 +138,7 @@ export const CALL_RESULT_COLORS: Record<CallResult, string> = {
 export const EMAIL_RESULT_LABEL = 'メール送付';
 export const EMAIL_RESULT_COLOR = 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200';
 
-export type LeadSource = 'past_inquiry' | 'lost_deal' | 'target_list' | 'seminar' | 'referral' | 'inbound' | 'external_list' | 'other' | '';
+export type LeadSource = 'past_inquiry' | 'lost_deal' | 'target_list' | 'seminar' | 'referral' | 'inbound' | 'external_list' | 'digima_registration' | 'other' | '';
 
 export const LEAD_SOURCE_LABELS: Record<LeadSource, string> = {
   past_inquiry: '過去問い合わせ',
@@ -148,6 +148,7 @@ export const LEAD_SOURCE_LABELS: Record<LeadSource, string> = {
   referral: '紹介',
   inbound: 'インバウンド',
   external_list: '外部リスト',
+  digima_registration: 'Digima〜出島〜登録',
   other: 'その他',
   '': '未設定',
 };
@@ -160,6 +161,7 @@ export const LEAD_SOURCE_COLORS: Record<LeadSource, string> = {
   referral: 'bg-amber-100 text-amber-800',
   inbound: 'bg-teal-100 text-teal-800',
   external_list: 'bg-orange-100 text-orange-800',
+  digima_registration: 'bg-cyan-100 text-cyan-800',
   other: 'bg-gray-100 text-gray-800',
   '': 'bg-gray-50 text-gray-400',
 };

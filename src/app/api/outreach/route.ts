@@ -87,11 +87,13 @@ export async function POST(request: NextRequest) {
     const supabase = createAdminClient();
     const client = new Anthropic({ apiKey });
 
-    // Fetch leads - exclude dnc/duplicate/excluded
+    // Fetch leads - exclude dnc/duplicate/excluded, active plans, and lost deals
     let query = supabase
       .from('leads')
       .select('*')
-      .not('status', 'in', '("dnc","duplicate","excluded")');
+      .not('status', 'in', '("dnc","duplicate","excluded")')
+      .not('hs_listing_plan', 'in', '("ライトプラン","ベーシックプラン","プレミアムプラン")')
+      .neq('lead_source', 'lost_deal');
 
     if (lead_source) {
       query = query.eq('lead_source', lead_source);
@@ -179,6 +181,8 @@ export async function POST(request: NextRequest) {
       .from('leads')
       .select('id', { count: 'exact', head: false })
       .not('status', 'in', '("dnc","duplicate","excluded")')
+      .not('hs_listing_plan', 'in', '("ライトプラン","ベーシックプラン","プレミアムプラン")')
+      .neq('lead_source', 'lost_deal')
       .not('email', 'eq', '')
       .not('email', 'is', null);
     if (lead_source) countQuery = countQuery.eq('lead_source', lead_source);

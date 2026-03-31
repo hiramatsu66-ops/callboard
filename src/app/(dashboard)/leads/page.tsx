@@ -97,6 +97,8 @@ function LeadsPage() {
   const [csvData, setCsvData] = useState<Record<string, string>[]>([]);
   const [importing, setImporting] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [hsImporting, setHsImporting] = useState(false);
+  const [hsImportProgress, setHsImportProgress] = useState('');
   const [addForm, setAddForm] = useState({ company_name: '', phone: '', contact_name: '', email: '', homepage: '', lead_source: '', inquiry_date: '', inquiry_content: '', memo: '' });
   const [showMailPanel, setShowMailPanel] = useState(false);
   const [emailTemplates, setEmailTemplates] = useState<EmailTemplate[]>([]);
@@ -525,6 +527,33 @@ function LeadsPage() {
     setSelectedIds(new Set());
     setSelectAllPages(false);
     loadLeads();
+  };
+
+  const handleHubSpotImport = async () => {
+    if (!confirm('HubSpotから支援企業（直近2ヶ月のDigima登録）をインポートしますか？')) return;
+    setHsImporting(true);
+    setHsImportProgress('取得中...');
+    try {
+      const res = await fetch('/api/hubspot-import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ max_pages: 50 }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setHsImportProgress(`${data.imported}件追加（${data.skipped}件スキップ）`);
+        loadLeads();
+        setTimeout(() => { setHsImportProgress(''); setHsImporting(false); }, 3000);
+      } else {
+        alert(`エラー: ${data.error}`);
+        setHsImporting(false);
+        setHsImportProgress('');
+      }
+    } catch {
+      alert('インポートに失敗しました');
+      setHsImporting(false);
+      setHsImportProgress('');
+    }
   };
 
   const handleBulkEmailGenerate = async () => {
@@ -1686,6 +1715,13 @@ function LeadsPage() {
               className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors"
             >
               CSVインポート
+            </button>
+            <button
+              onClick={handleHubSpotImport}
+              disabled={hsImporting}
+              className="px-4 py-2 border border-orange-300 text-orange-700 text-sm font-medium rounded-lg hover:bg-orange-50 transition-colors disabled:opacity-50"
+            >
+              {hsImporting ? hsImportProgress : 'HubSpotインポート'}
             </button>
           </div>
         </div>
