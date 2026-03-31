@@ -207,6 +207,7 @@ alter table public.leads add column if not exists industry text default '';
 alter table public.leads add column if not exists company_size text default '';
 alter table public.leads add column if not exists overseas_interest text default '';
 alter table public.leads add column if not exists target_countries text default '';
+alter table public.leads add column if not exists hs_listing_plan text default '';
 
 -- ============================================
 -- 5c. ADD ACTIVITY TYPE TO CALL_LOGS

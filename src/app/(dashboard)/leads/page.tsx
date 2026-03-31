@@ -29,8 +29,8 @@ const supabase = createClient();
 
 const DEFAULT_COLUMN_ORDER = [
   'company_name', 'contact_name', 'phone', 'email', 'homepage',
-  'lead_source', 'inquiry_date', 'inquiry_content', 'hs_deal_exists',
-  'hs_deal_owner', 'hs_deal_created_at', 'priority', 'status',
+  'lead_source', 'inquiry_date', 'inquiry_content', 'hs_listing_plan',
+  'hs_deal_exists', 'hs_deal_owner', 'hs_deal_created_at', 'priority', 'status',
   'next_activity_date', 'assigned_to', 'memo',
 ];
 
@@ -43,6 +43,7 @@ const COLUMN_LABELS: Record<string, string> = {
   lead_source: '流入経路',
   inquiry_date: '問い合わせ日',
   inquiry_content: '問い合わせ内容',
+  hs_listing_plan: '掲載プラン',
   hs_deal_exists: '商談',
   hs_deal_owner: '商談担当',
   hs_deal_created_at: '取引作成日',
@@ -71,15 +72,26 @@ function LeadsPage() {
   const [page, setPage] = useState(() => Number(searchParams.get('page') || '0'));
   const [search, setSearch] = useState(() => searchParams.get('q') || '');
   const [debouncedSearch, setDebouncedSearch] = useState(() => searchParams.get('q') || '');
-  const [statusFilter, setStatusFilter] = useState<LeadStatus | 'all'>(() => (searchParams.get('status') as LeadStatus | 'all') || 'all');
-  const [excludedStatuses, setExcludedStatuses] = useState<Set<LeadStatus>>(() => {
-    const ex = searchParams.get('exclude');
-    return ex ? new Set(ex.split(',') as LeadStatus[]) : new Set();
+  // Column filters: key = column name, value = Set of selected values (include mode)
+  // Special values: '__unset__' for empty/null, '__unassigned__' for null assigned_to
+  const [columnFilters, setColumnFilters] = useState<Record<string, Set<string>>>(() => {
+    const filters: Record<string, Set<string>> = {};
+    // Migrate from legacy URL params
+    const status = searchParams.get('status');
+    if (status && status !== 'all') filters.status = new Set([status]);
+    const assigned = searchParams.get('assigned');
+    if (assigned && assigned !== 'all') filters.assigned_to = new Set([assigned]);
+    // New column filter URL params: cf_<column>=val1,val2
+    for (const [key, val] of searchParams.entries()) {
+      if (key.startsWith('cf_') && val) {
+        filters[key.slice(3)] = new Set(val.split(','));
+      }
+    }
+    return filters;
   });
+  const [openFilterColumn, setOpenFilterColumn] = useState<string | null>(null);
   const [excludeDeal, setExcludeDeal] = useState<boolean>(() => searchParams.get('excludeDeal') === '1');
   const [excludeHasNextActivity, setExcludeHasNextActivity] = useState<boolean>(() => searchParams.get('excludeNextAct') === '1');
-  const [showStatusDropdown, setShowStatusDropdown] = useState(false);
-  const [assignedFilter, setAssignedFilter] = useState<string>(() => searchParams.get('assigned') || 'all');
   const [loading, setLoading] = useState(true);
   const [showImportModal, setShowImportModal] = useState(false);
   const [csvData, setCsvData] = useState<Record<string, string>[]>([]);
@@ -120,6 +132,11 @@ function LeadsPage() {
   const [gmailConnected, setGmailConnected] = useState(false);
   const [gmailEmail, setGmailEmail] = useState('');
 
+  // HubSpot email history
+  const [hsEmailHistory, setHsEmailHistory] = useState<{ id: string; subject: string; bodyPreview: string; direction: string; from: string; to: string; timestamp: string }[]>([]);
+  const [hsEmailLoading, setHsEmailLoading] = useState(false);
+  const [showHsEmails, setShowHsEmails] = useState(false);
+
   // Edit call log state
   const [editingLogId, setEditingLogId] = useState<string | null>(null);
   const [editLogResult, setEditLogResult] = useState<CallResult>('no_answer');
@@ -132,11 +149,19 @@ function LeadsPage() {
   // Column order state (persisted to localStorage)
   const [columnOrder, setColumnOrder] = useState<string[]>(() => {
     if (typeof window !== 'undefined') {
+      // カラム構成が変わったらlocalStorageをリセット
+      const COLUMN_VERSION = '2'; // カラム追加時にインクリメント
+      const savedVersion = localStorage.getItem('callboard-column-version');
+      if (savedVersion !== COLUMN_VERSION) {
+        localStorage.removeItem('callboard-column-order');
+        localStorage.removeItem('callboard-hidden-columns');
+        localStorage.setItem('callboard-column-version', COLUMN_VERSION);
+        return DEFAULT_COLUMN_ORDER;
+      }
       const saved = localStorage.getItem('callboard-column-order');
       if (saved) {
         try {
           const parsed = JSON.parse(saved) as string[];
-          // Ensure all columns are present (handle added/removed columns)
           const allCols = new Set(DEFAULT_COLUMN_ORDER);
           const validSaved = parsed.filter(k => allCols.has(k));
           const missing = DEFAULT_COLUMN_ORDER.filter(k => !validSaved.includes(k));
@@ -146,6 +171,16 @@ function LeadsPage() {
     }
     return DEFAULT_COLUMN_ORDER;
   });
+  const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('callboard-hidden-columns');
+      if (saved) {
+        try { return new Set(JSON.parse(saved) as string[]); } catch { /* fall through */ }
+      }
+    }
+    return new Set();
+  });
+  const [showColumnSettings, setShowColumnSettings] = useState(false);
   const dragColumnRef = useRef<string | null>(null);
   const [dragOverColumn, setDragOverColumn] = useState<string | null>(null);
 
@@ -162,6 +197,7 @@ function LeadsPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkAssignTo, setBulkAssignTo] = useState('');
   const [bulkStatus, setBulkStatus] = useState('');
+  const [bulkLeadSource, setBulkLeadSource] = useState('');
   const [selectAllPages, setSelectAllPages] = useState(false);
   const [sortColumn, setSortColumn] = useState<string>(() => searchParams.get('sort') || 'created_at');
   const [sortAscending, setSortAscending] = useState(() => searchParams.get('asc') === '1');
@@ -179,18 +215,18 @@ function LeadsPage() {
   useEffect(() => {
     const params = new URLSearchParams();
     if (debouncedSearch) params.set('q', debouncedSearch);
-    if (statusFilter !== 'all') params.set('status', statusFilter);
-    if (excludedStatuses.size > 0) params.set('exclude', Array.from(excludedStatuses).join(','));
+    for (const [col, vals] of Object.entries(columnFilters)) {
+      if (vals.size > 0) params.set(`cf_${col}`, Array.from(vals).join(','));
+    }
     if (excludeDeal) params.set('excludeDeal', '1');
     if (excludeHasNextActivity) params.set('excludeNextAct', '1');
-    if (assignedFilter !== 'all') params.set('assigned', assignedFilter);
     if (sortColumn !== 'created_at') params.set('sort', sortColumn);
     if (sortAscending) params.set('asc', '1');
     if (page > 0) params.set('page', String(page));
     const qs = params.toString();
     const newUrl = qs ? `/leads?${qs}` : '/leads';
     window.history.replaceState(null, '', newUrl);
-  }, [debouncedSearch, statusFilter, excludedStatuses, excludeDeal, excludeHasNextActivity, assignedFilter, sortColumn, sortAscending, page]);
+  }, [debouncedSearch, columnFilters, excludeDeal, excludeHasNextActivity, sortColumn, sortAscending, page]);
 
   // Load Gmail connection status
   useEffect(() => {
@@ -206,6 +242,82 @@ function LeadsPage() {
     });
   }, []);
 
+  // Apply column filters + common filters to any supabase query
+  const applyFilters = useCallback(<T extends { or: Function; eq: Function; is: Function; in: Function }>(query: T): T => {
+    if (debouncedSearch) {
+      query = query.or(
+        `company_name.ilike.%${debouncedSearch}%,contact_name.ilike.%${debouncedSearch}%,phone.ilike.%${debouncedSearch}%`
+      ) as T;
+    }
+    for (const [col, vals] of Object.entries(columnFilters)) {
+      if (vals.size === 0) continue;
+      if (col === 'assigned_to') {
+        if (vals.has('__unassigned__') && vals.size === 1) {
+          query = query.is('assigned_to', null) as T;
+        } else {
+          const ids = Array.from(vals).filter(v => v !== '__unassigned__');
+          const parts: string[] = ids.map(id => `assigned_to.eq.${id}`);
+          if (vals.has('__unassigned__')) parts.push('assigned_to.is.null');
+          query = query.or(parts.join(',')) as T;
+        }
+      } else if (col === 'lead_source') {
+        const sources = Array.from(vals);
+        const hasEmpty = sources.includes('');
+        const nonEmpty = sources.filter(s => s !== '');
+        if (!hasEmpty && nonEmpty.length === 1) {
+          query = query.eq('lead_source', nonEmpty[0]) as T;
+        } else if (!hasEmpty) {
+          query = query.in('lead_source', nonEmpty) as T;
+        } else {
+          // Need .or() to combine eq values with is.null
+          const parts: string[] = nonEmpty.map(s => `lead_source.eq.${s}`);
+          parts.push('lead_source.is.null');
+          parts.push('lead_source.eq.');
+          query = query.or(parts.join(',')) as T;
+        }
+      } else if (col === 'hs_listing_plan') {
+        const plans = Array.from(vals);
+        const hasEmpty = plans.includes('');
+        const nonEmpty = plans.filter(s => s !== '');
+        if (!hasEmpty && nonEmpty.length === 1) {
+          query = query.eq('hs_listing_plan', nonEmpty[0]) as T;
+        } else if (!hasEmpty) {
+          query = query.in('hs_listing_plan', nonEmpty) as T;
+        } else {
+          const parts: string[] = nonEmpty.map(s => `hs_listing_plan.eq.${s}`);
+          parts.push('hs_listing_plan.is.null');
+          parts.push('hs_listing_plan.eq.');
+          query = query.or(parts.join(',')) as T;
+        }
+      } else if (col === 'hs_deal_exists') {
+        const values = Array.from(vals);
+        if (values.length === 1) {
+          if (values[0] === 'true') {
+            query = query.eq('hs_deal_exists', true) as T;
+          } else {
+            query = query.or('hs_deal_exists.is.null,hs_deal_exists.eq.false') as T;
+          }
+        }
+        // If both selected, no filter needed
+      } else {
+        // status, priority, etc.
+        const values = Array.from(vals);
+        if (values.length === 1) {
+          query = query.eq(col, values[0]) as T;
+        } else {
+          query = query.in(col, values) as T;
+        }
+      }
+    }
+    if (excludeDeal) {
+      query = query.or('hs_deal_exists.is.null,hs_deal_exists.eq.false') as T;
+    }
+    if (excludeHasNextActivity) {
+      query = query.is('next_activity_date', null) as T;
+    }
+    return query;
+  }, [debouncedSearch, columnFilters, excludeDeal, excludeHasNextActivity]);
+
   const loadLeads = useCallback(async () => {
     try {
       setLoading(true);
@@ -214,37 +326,7 @@ function LeadsPage() {
         .from('leads')
         .select('*', { count: 'exact' });
 
-      if (debouncedSearch) {
-        query = query.or(
-          `company_name.ilike.%${debouncedSearch}%,contact_name.ilike.%${debouncedSearch}%,phone.ilike.%${debouncedSearch}%`
-        );
-      }
-
-      if (statusFilter !== 'all') {
-        query = query.eq('status', statusFilter);
-      }
-
-      if (excludedStatuses.size > 0) {
-        for (const s of excludedStatuses) {
-          query = query.neq('status', s);
-        }
-      }
-
-      if (assignedFilter !== 'all') {
-        if (assignedFilter === 'unassigned') {
-          query = query.is('assigned_to', null);
-        } else {
-          query = query.eq('assigned_to', assignedFilter);
-        }
-      }
-
-      if (excludeDeal) {
-        query = query.or('hs_deal_exists.is.null,hs_deal_exists.eq.false');
-      }
-
-      if (excludeHasNextActivity) {
-        query = query.is('next_activity_date', null);
-      }
+      query = applyFilters(query);
 
       const { data, count } = await query
         .order(sortColumn, { ascending: sortAscending })
@@ -258,8 +340,7 @@ function LeadsPage() {
       setLoading(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, debouncedSearch, statusFilter, assignedFilter, sortColumn, sortAscending, excludedStatuses, excludeDeal, excludeHasNextActivity]);
+  }, [page, applyFilters, sortColumn, sortAscending]);
 
   useEffect(() => {
     const loadProfiles = async () => {
@@ -285,8 +366,24 @@ function LeadsPage() {
   }, [loadLeads]);
 
   // Sidebar: load call logs for selected lead
+  const loadHsEmails = useCallback(async (lead: Lead) => {
+    setHsEmailLoading(true);
+    setHsEmailHistory([]);
+    try {
+      const params = new URLSearchParams();
+      if (lead.company_name) params.set('company', lead.company_name);
+      if (lead.email) params.set('email', lead.email);
+      const res = await fetch(`/api/hubspot-activities?${params}`);
+      const data = await res.json();
+      setHsEmailHistory(data.activities || []);
+    } catch { /* ignore */ }
+    setHsEmailLoading(false);
+  }, []);
+
   const loadSidebarData = useCallback(async (lead: Lead) => {
     setSidebarLoading(true);
+    setShowHsEmails(false);
+    setHsEmailHistory([]);
     const { data } = await supabase
       .from('call_logs')
       .select('*')
@@ -542,7 +639,7 @@ function LeadsPage() {
       });
       const data = await res.json();
       if (res.ok) {
-        const updated = { ...selectedLead, hs_deal_exists: data.deal_exists, hs_checked_at: data.checked_at, hs_deal_owner: data.deal_owner || '', hs_deal_created_at: data.deal_created_at || null };
+        const updated = { ...selectedLead, hs_deal_exists: data.deal_exists, hs_checked_at: data.checked_at, hs_deal_owner: data.deal_owner || '', hs_deal_created_at: data.deal_created_at || null, hs_listing_plan: data.listing_plan || '' };
         setSelectedLead(updated);
         setLeads(prev => prev.map(l => l.id === updated.id ? { ...l, ...updated } : l));
       }
@@ -776,10 +873,16 @@ function LeadsPage() {
     });
   };
 
-  // Column order persistence
+  // Column order & visibility persistence
   useEffect(() => {
     localStorage.setItem('callboard-column-order', JSON.stringify(columnOrder));
   }, [columnOrder]);
+
+  useEffect(() => {
+    localStorage.setItem('callboard-hidden-columns', JSON.stringify(Array.from(hiddenColumns)));
+  }, [hiddenColumns]);
+
+  const visibleColumns = useMemo(() => columnOrder.filter(k => !hiddenColumns.has(k)), [columnOrder, hiddenColumns]);
 
   const handleColumnDragStart = (key: string) => {
     dragColumnRef.current = key;
@@ -819,6 +922,59 @@ function LeadsPage() {
     setPage(0);
   };
 
+  // Column filter helpers
+  const FILTERABLE_COLUMNS: Record<string, { options: Record<string, string>; colors?: Record<string, string> }> = useMemo(() => ({
+    lead_source: { options: LEAD_SOURCE_LABELS as Record<string, string>, colors: LEAD_SOURCE_COLORS as Record<string, string> },
+    status: { options: LEAD_STATUS_LABELS as Record<string, string>, colors: LEAD_STATUS_COLORS as Record<string, string> },
+    priority: { options: { A: 'A', B: 'B', C: 'C', '': '未設定' }, colors: { ...PRIORITY_COLORS, '': 'bg-gray-50 text-gray-400' } },
+    hs_listing_plan: { options: { 'プレミアムプラン': 'プレミアム', 'ベーシックプラン': 'ベーシック', 'ライトプラン': 'ライト', 'フリープラン': 'フリー', 'お試しプラン': 'お試し', '': '未設定' }, colors: { 'プレミアムプラン': 'bg-purple-100 text-purple-800', 'ベーシックプラン': 'bg-blue-100 text-blue-800', 'ライトプラン': 'bg-teal-100 text-teal-800', 'フリープラン': 'bg-gray-100 text-gray-600', 'お試しプラン': 'bg-amber-100 text-amber-800', '': 'bg-gray-50 text-gray-400' } },
+    hs_deal_exists: { options: { 'true': '商談あり', 'false': '商談なし' }, colors: { 'true': 'bg-green-100 text-green-800', 'false': 'bg-gray-100 text-gray-600' } },
+    assigned_to: { options: {}, colors: {} }, // built dynamically from profiles
+  }), []);
+
+  const toggleColumnFilter = (column: string, value: string) => {
+    setColumnFilters(prev => {
+      const next = { ...prev };
+      const current = new Set(prev[column] || []);
+      if (current.has(value)) {
+        current.delete(value);
+      } else {
+        current.add(value);
+      }
+      if (current.size === 0) {
+        delete next[column];
+      } else {
+        next[column] = current;
+      }
+      return next;
+    });
+    setPage(0);
+  };
+
+  const clearColumnFilter = (column: string) => {
+    setColumnFilters(prev => {
+      const next = { ...prev };
+      delete next[column];
+      return next;
+    });
+    setPage(0);
+  };
+
+  const clearAllFilters = () => {
+    setColumnFilters({});
+    setExcludeDeal(false);
+    setExcludeHasNextActivity(false);
+    setSearch('');
+    setPage(0);
+  };
+
+  const activeFilterCount = useMemo(() => {
+    let count = Object.keys(columnFilters).length;
+    if (excludeDeal) count++;
+    if (excludeHasNextActivity) count++;
+    return count;
+  }, [columnFilters, excludeDeal, excludeHasNextActivity]);
+
   const toggleSelectAll = () => {
     if (selectedIds.size === leads.length) {
       setSelectedIds(new Set());
@@ -830,32 +986,7 @@ function LeadsPage() {
 
   const buildBulkQuery = (updateData: Record<string, unknown>) => {
     let query = supabase.from('leads').update(updateData);
-    if (debouncedSearch) {
-      query = query.or(
-        `company_name.ilike.%${debouncedSearch}%,contact_name.ilike.%${debouncedSearch}%,phone.ilike.%${debouncedSearch}%`
-      );
-    }
-    if (statusFilter !== 'all') {
-      query = query.eq('status', statusFilter);
-    }
-    if (excludedStatuses.size > 0) {
-      for (const s of excludedStatuses) {
-        query = query.neq('status', s);
-      }
-    }
-    if (assignedFilter !== 'all') {
-      if (assignedFilter === 'unassigned') {
-        query = query.is('assigned_to', null);
-      } else {
-        query = query.eq('assigned_to', assignedFilter);
-      }
-    }
-    if (excludeDeal) {
-      query = query.or('hs_deal_exists.is.null,hs_deal_exists.eq.false');
-    }
-    if (excludeHasNextActivity) {
-      query = query.is('next_activity_date', null);
-    }
+    query = applyFilters(query);
     return query;
   };
 
@@ -865,30 +996,7 @@ function LeadsPage() {
     let from = 0;
     while (true) {
       let query = supabase.from('leads').select('*');
-      if (debouncedSearch) {
-        query = query.or(
-          `company_name.ilike.%${debouncedSearch}%,contact_name.ilike.%${debouncedSearch}%,phone.ilike.%${debouncedSearch}%`
-        );
-      }
-      if (statusFilter !== 'all') {
-        query = query.eq('status', statusFilter);
-      }
-      for (const s of excludedStatuses) {
-        query = query.neq('status', s);
-      }
-      if (assignedFilter !== 'all') {
-        if (assignedFilter === 'unassigned') {
-          query = query.is('assigned_to', null);
-        } else {
-          query = query.eq('assigned_to', assignedFilter);
-        }
-      }
-      if (excludeDeal) {
-        query = query.or('hs_deal_exists.is.null,hs_deal_exists.eq.false');
-      }
-      if (excludeHasNextActivity) {
-        query = query.is('next_activity_date', null);
-      }
+      query = applyFilters(query);
       const { data } = await query.range(from, from + batchSize - 1);
       if (!data || data.length === 0) break;
       allLeads = allLeads.concat(data);
@@ -932,6 +1040,23 @@ function LeadsPage() {
     loadLeads();
   };
 
+  const handleBulkLeadSource = async () => {
+    if (selectedIds.size === 0) return;
+    if (selectAllPages) {
+      await buildBulkQuery({ lead_source: bulkLeadSource });
+    } else {
+      const ids = Array.from(selectedIds);
+      await supabase
+        .from('leads')
+        .update({ lead_source: bulkLeadSource })
+        .in('id', ids);
+    }
+    setSelectedIds(new Set());
+    setSelectAllPages(false);
+    setBulkLeadSource('');
+    loadLeads();
+  };
+
   const handleBulkDelete = async () => {
     if (selectedIds.size === 0) return;
     const count = selectAllPages ? totalCount : selectedIds.size;
@@ -939,24 +1064,7 @@ function LeadsPage() {
 
     if (selectAllPages) {
       let query = supabase.from('leads').delete();
-      if (debouncedSearch) {
-        query = query.or(
-          `company_name.ilike.%${debouncedSearch}%,contact_name.ilike.%${debouncedSearch}%,phone.ilike.%${debouncedSearch}%`
-        );
-      }
-      if (statusFilter !== 'all') {
-        query = query.eq('status', statusFilter);
-      }
-      for (const s of excludedStatuses) {
-        query = query.neq('status', s);
-      }
-      if (assignedFilter !== 'all') {
-        if (assignedFilter === 'unassigned') {
-          query = query.is('assigned_to', null);
-        } else {
-          query = query.eq('assigned_to', assignedFilter);
-        }
-      }
+      query = applyFilters(query);
       await query;
     } else {
       const ids = Array.from(selectedIds);
@@ -1369,6 +1477,25 @@ function LeadsPage() {
             )}
           </td>
         );
+      case 'hs_listing_plan': {
+        const plan = lead.hs_listing_plan || '';
+        const planLabel = plan ? plan.replace('プラン', '') : '-';
+        const planColor = plan === 'プレミアムプラン' ? 'bg-purple-100 text-purple-800'
+          : plan === 'ベーシックプラン' ? 'bg-blue-100 text-blue-800'
+          : plan === 'ライトプラン' ? 'bg-teal-100 text-teal-800'
+          : plan === 'フリープラン' ? 'bg-gray-100 text-gray-600'
+          : plan === 'お試しプラン' ? 'bg-amber-100 text-amber-800'
+          : '';
+        return (
+          <td key={colKey} className="py-2 px-3 text-center whitespace-nowrap">
+            {plan ? (
+              <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-medium ${planColor}`}>{planLabel}</span>
+            ) : (
+              <span className="text-gray-300 text-xs">-</span>
+            )}
+          </td>
+        );
+      }
       case 'hs_deal_exists':
         return (
           <td key={colKey} className="py-2 px-3 text-center">
@@ -1544,7 +1671,7 @@ function LeadsPage() {
   return (
     <div className="relative h-full">
       {/* Main content */}
-      <div className="space-y-6">
+      <div className={`space-y-6 transition-all duration-200 ${selectedLead ? 'mr-96' : ''}`}>
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold text-gray-800">架電リスト</h1>
           <div className="flex gap-2">
@@ -1565,89 +1692,124 @@ function LeadsPage() {
 
         {/* Bulk actions bar */}
         {selectedIds.size > 0 && (
-          <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-2 space-y-1">
-            {selectedIds.size === leads.length && totalCount > leads.length && !selectAllPages && (
-              <div className="text-sm text-center text-blue-700">
-                このページの{leads.length}件を選択中。
+          <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 space-y-2">
+            {/* Selection info */}
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-medium text-blue-800">
+                {selectAllPages ? totalCount : selectedIds.size}件選択中
+              </span>
+              <div className="flex items-center gap-2 text-sm">
+                {selectedIds.size === leads.length && totalCount > leads.length && !selectAllPages && (
+                  <button
+                    onClick={() => setSelectAllPages(true)}
+                    className="text-blue-700 underline hover:text-blue-900"
+                  >
+                    全{totalCount}件を選択
+                  </button>
+                )}
+                {selectAllPages && (
+                  <button
+                    onClick={() => { setSelectAllPages(false); setSelectedIds(new Set(leads.map(l => l.id))); }}
+                    className="text-blue-700 underline hover:text-blue-900"
+                  >
+                    このページのみに戻す
+                  </button>
+                )}
                 <button
-                  onClick={() => setSelectAllPages(true)}
-                  className="ml-1 font-medium text-blue-900 underline hover:text-blue-700"
+                  onClick={() => { setSelectedIds(new Set()); setSelectAllPages(false); }}
+                  className="text-gray-500 hover:text-gray-700"
                 >
-                  全{totalCount}件を選択
+                  選択解除
                 </button>
               </div>
-            )}
-            {selectAllPages && (
-              <div className="text-sm text-center text-blue-700">
-                全{totalCount}件を選択中。
-                <button
-                  onClick={() => { setSelectAllPages(false); setSelectedIds(new Set(leads.map(l => l.id))); }}
-                  className="ml-1 font-medium text-blue-900 underline hover:text-blue-700"
+            </div>
+
+            {/* Bulk actions - grouped */}
+            <div className="flex flex-wrap gap-2">
+              {/* Group 1: Data changes */}
+              <div className="flex items-center gap-1 bg-white rounded-md border border-gray-200 px-2 py-1">
+                <select
+                  value={bulkAssignTo}
+                  onChange={(e) => setBulkAssignTo(e.target.value)}
+                  className="px-1 py-0.5 text-xs border-0 bg-transparent focus:ring-0"
                 >
-                  このページのみに戻す
+                  <option value="">担当</option>
+                  <option value="">未割当</option>
+                  {profiles.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={handleBulkAssign}
+                  className="px-2 py-0.5 bg-slate-700 text-white text-xs rounded hover:bg-slate-600"
+                >
+                  変更
                 </button>
               </div>
-            )}
-            <div className="flex flex-wrap items-center gap-3">
-            <span className="text-sm font-medium text-blue-800">{selectAllPages ? totalCount : selectedIds.size}件選択中</span>
-            <div className="flex flex-wrap items-center gap-2 ml-auto">
-              <select
-                value={bulkAssignTo}
-                onChange={(e) => setBulkAssignTo(e.target.value)}
-                className="px-2 py-1 border border-gray-300 rounded text-sm bg-white"
-              >
-                <option value="">担当を選択</option>
-                <option value="">未割当</option>
-                {profiles.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
-              <button
-                onClick={handleBulkAssign}
-                className="px-3 py-1 bg-slate-800 text-white text-sm rounded hover:bg-slate-700"
-              >
-                担当を一括変更
-              </button>
-              <span className="text-gray-300">|</span>
-              <select
-                value={bulkStatus}
-                onChange={(e) => setBulkStatus(e.target.value)}
-                className="px-2 py-1 border border-gray-300 rounded text-sm bg-white"
-              >
-                <option value="">ステータスを選択</option>
-                {Object.entries(LEAD_STATUS_LABELS).map(([key, label]) => (
-                  <option key={key} value={key}>{label}</option>
-                ))}
-              </select>
-              <button
-                onClick={handleBulkStatus}
-                disabled={!bulkStatus}
-                className="px-3 py-1 bg-slate-800 text-white text-sm rounded hover:bg-slate-700 disabled:opacity-50"
-              >
-                ステータスを一括変更
-              </button>
-              <span className="text-gray-300">|</span>
-              <button
-                onClick={handleBulkHsCheck}
-                disabled={bulkHsChecking}
-                className="px-3 py-1 bg-orange-600 text-white text-sm rounded hover:bg-orange-700 disabled:opacity-50"
-              >
-                {bulkHsChecking ? bulkHsProgress : 'HubSpot商談チェック'}
-              </button>
-              <span className="text-gray-300">|</span>
-              <button
-                onClick={handleBulkClassifyPriority}
-                disabled={bulkClassifying}
-                className="px-3 py-1 bg-violet-600 text-white text-sm rounded hover:bg-violet-700 disabled:opacity-50"
-              >
-                {bulkClassifying ? bulkClassifyProgress : 'AI優先度判定'}
-              </button>
-              <span className="text-gray-300">|</span>
+
+              <div className="flex items-center gap-1 bg-white rounded-md border border-gray-200 px-2 py-1">
+                <select
+                  value={bulkStatus}
+                  onChange={(e) => setBulkStatus(e.target.value)}
+                  className="px-1 py-0.5 text-xs border-0 bg-transparent focus:ring-0"
+                >
+                  <option value="">ステータス</option>
+                  {Object.entries(LEAD_STATUS_LABELS).map(([key, label]) => (
+                    <option key={key} value={key}>{label}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={handleBulkStatus}
+                  disabled={!bulkStatus}
+                  className="px-2 py-0.5 bg-slate-700 text-white text-xs rounded hover:bg-slate-600 disabled:opacity-50"
+                >
+                  変更
+                </button>
+              </div>
+
+              <div className="flex items-center gap-1 bg-white rounded-md border border-gray-200 px-2 py-1">
+                <select
+                  value={bulkLeadSource}
+                  onChange={(e) => setBulkLeadSource(e.target.value)}
+                  className="px-1 py-0.5 text-xs border-0 bg-transparent focus:ring-0"
+                >
+                  <option value="">流入経路</option>
+                  {Object.entries(LEAD_SOURCE_LABELS).map(([key, label]) => (
+                    <option key={key} value={key}>{label}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={handleBulkLeadSource}
+                  className="px-2 py-0.5 bg-slate-700 text-white text-xs rounded hover:bg-slate-600"
+                >
+                  変更
+                </button>
+              </div>
+
+              {/* Group 2: AI / External */}
               <div className="flex items-center gap-1">
+                <button
+                  onClick={handleBulkHsCheck}
+                  disabled={bulkHsChecking}
+                  className="px-2 py-1 bg-orange-600 text-white text-xs rounded hover:bg-orange-700 disabled:opacity-50"
+                >
+                  {bulkHsChecking ? bulkHsProgress : 'HubSpot確認'}
+                </button>
+                <button
+                  onClick={handleBulkClassifyPriority}
+                  disabled={bulkClassifying}
+                  className="px-2 py-1 bg-violet-600 text-white text-xs rounded hover:bg-violet-700 disabled:opacity-50"
+                >
+                  {bulkClassifying ? bulkClassifyProgress : 'AI優先度'}
+                </button>
+              </div>
+
+              {/* Group 3: Email */}
+              <div className="flex items-center gap-1 bg-white rounded-md border border-blue-200 px-2 py-1">
                 <select
                   value={bulkEmailTemplateType}
                   onChange={(e) => setBulkEmailTemplateType(e.target.value as typeof bulkEmailTemplateType)}
-                  className="px-2 py-1 text-xs border border-blue-400 rounded bg-white"
+                  className="px-1 py-0.5 text-xs border-0 bg-transparent focus:ring-0"
                 >
                   <option value="reapproach">再アプローチ</option>
                   <option value="initial">初回</option>
@@ -1657,31 +1819,25 @@ function LeadsPage() {
                 <button
                   onClick={handleBulkEmailGenerate}
                   disabled={bulkEmailGenerating}
-                  className="px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 disabled:opacity-50"
+                  className="px-2 py-0.5 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 disabled:opacity-50"
                 >
-                  {bulkEmailGenerating ? bulkEmailGenerateProgress : 'メール一括生成'}
+                  {bulkEmailGenerating ? bulkEmailGenerateProgress : 'メール生成'}
                 </button>
               </div>
-              <span className="text-gray-300">|</span>
+
+              {/* Group 4: Danger */}
               <button
                 onClick={handleBulkDelete}
-                className="px-3 py-1 bg-red-600 text-white text-sm rounded hover:bg-red-700"
+                className="px-2 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700 ml-auto"
               >
                 一括削除
               </button>
-              <button
-                onClick={() => { setSelectedIds(new Set()); setSelectAllPages(false); }}
-                className="px-2 py-1 text-sm text-gray-500 hover:text-gray-700"
-              >
-                選択解除
-              </button>
-            </div>
             </div>
           </div>
         )}
 
         {/* Filters */}
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
           <div className="flex-1">
             <input
               type="text"
@@ -1691,107 +1847,120 @@ function LeadsPage() {
               className="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-500 focus:border-transparent"
             />
           </div>
+          {/* Column settings */}
           <div className="relative">
             <button
-              onClick={() => setShowStatusDropdown(!showStatusDropdown)}
-              className="px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-500 bg-white flex items-center gap-2 min-w-[160px]"
+              onClick={() => setShowColumnSettings(!showColumnSettings)}
+              className={`p-2 border rounded-lg hover:bg-gray-50 transition-colors ${showColumnSettings ? 'border-blue-400 bg-blue-50' : 'border-gray-300 bg-white'}`}
+              title="列の表示設定"
             >
-              <span>
-                {statusFilter !== 'all'
-                  ? LEAD_STATUS_LABELS[statusFilter]
-                  : (excludedStatuses.size > 0 || excludeDeal || excludeHasNextActivity)
-                    ? `${excludedStatuses.size + (excludeDeal ? 1 : 0) + (excludeHasNextActivity ? 1 : 0)}件除外中`
-                    : '全てのステータス'}
-              </span>
-              <svg className="w-4 h-4 ml-auto text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              <svg className="w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
               </svg>
             </button>
-            {showStatusDropdown && (
+            {showColumnSettings && (
               <>
-                <div className="fixed inset-0 z-10" onClick={() => setShowStatusDropdown(false)} />
-                <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-20 min-w-[220px] py-1">
-                  <button
-                    onClick={() => { setStatusFilter('all'); setExcludedStatuses(new Set()); setExcludeDeal(false); setExcludeHasNextActivity(false); setPage(0); setShowStatusDropdown(false); }}
-                    className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 ${statusFilter === 'all' && excludedStatuses.size === 0 && !excludeDeal && !excludeHasNextActivity ? 'font-medium text-blue-600' : ''}`}
-                  >
-                    全てのステータス
-                  </button>
-                  <div className="border-t border-gray-100 my-1" />
-                  <p className="px-3 py-1 text-xs text-gray-400">絞り込み（クリック）</p>
-                  {Object.entries(LEAD_STATUS_LABELS).map(([key, label]) => (
+                <div className="fixed inset-0 z-20" onClick={() => setShowColumnSettings(false)} />
+                <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-30 w-56 py-1 max-h-[400px] overflow-y-auto">
+                  <div className="px-3 py-2 border-b border-gray-100 flex items-center justify-between">
+                    <span className="text-xs font-medium text-gray-500">表示する列</span>
                     <button
-                      key={`include-${key}`}
-                      onClick={() => { setStatusFilter(key as LeadStatus); setExcludedStatuses(new Set()); setPage(0); setShowStatusDropdown(false); }}
-                      className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 ${statusFilter === key ? 'font-medium text-blue-600' : ''}`}
+                      onClick={() => setHiddenColumns(new Set())}
+                      className="text-xs text-blue-600 hover:text-blue-800"
                     >
-                      <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${LEAD_STATUS_COLORS[key as LeadStatus]}`}>{label}</span>
+                      全て表示
                     </button>
-                  ))}
-                  <div className="border-t border-gray-100 my-1" />
-                  <p className="px-3 py-1 text-xs text-gray-400">除外（チェックで除外）</p>
-                  <label className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-gray-50 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={excludeDeal}
-                      onChange={() => { setExcludeDeal(!excludeDeal); setPage(0); }}
-                      className="rounded border-gray-300"
-                    />
-                    <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">商談済み</span>
-                  </label>
-                  <label className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-gray-50 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={excludeHasNextActivity}
-                      onChange={() => { setExcludeHasNextActivity(!excludeHasNextActivity); setPage(0); }}
-                      className="rounded border-gray-300"
-                    />
-                    <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-teal-100 text-teal-700">次回予定あり</span>
-                  </label>
-                  {Object.entries(LEAD_STATUS_LABELS).map(([key, label]) => (
-                    <label
-                      key={`exclude-${key}`}
-                      className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-gray-50 cursor-pointer"
-                    >
+                  </div>
+                  {columnOrder.map((key) => (
+                    <label key={key} className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-gray-50 cursor-pointer">
                       <input
                         type="checkbox"
-                        checked={excludedStatuses.has(key as LeadStatus)}
+                        checked={!hiddenColumns.has(key)}
                         onChange={() => {
-                          const next = new Set(excludedStatuses);
-                          if (next.has(key as LeadStatus)) {
-                            next.delete(key as LeadStatus);
-                          } else {
-                            next.add(key as LeadStatus);
-                          }
-                          setExcludedStatuses(next);
-                          setStatusFilter('all');
-                          setPage(0);
+                          setHiddenColumns(prev => {
+                            const next = new Set(prev);
+                            if (next.has(key)) {
+                              next.delete(key);
+                            } else {
+                              next.add(key);
+                            }
+                            return next;
+                          });
                         }}
                         className="rounded border-gray-300"
                       />
-                      <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${LEAD_STATUS_COLORS[key as LeadStatus]}`}>{label}</span>
+                      <span className={hiddenColumns.has(key) ? 'text-gray-400' : 'text-gray-700'}>
+                        {COLUMN_LABELS[key]}
+                      </span>
                     </label>
                   ))}
+                  <div className="px-3 py-2 border-t border-gray-100">
+                    <p className="text-xs text-gray-400">ドラッグ&ドロップで列順変更</p>
+                  </div>
                 </div>
               </>
             )}
           </div>
-          <select
-            value={assignedFilter}
-            onChange={(e) => {
-              setAssignedFilter(e.target.value);
-              setPage(0);
-            }}
-            className="px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-500 bg-white"
-          >
-            <option value="all">全ての担当者</option>
-            <option value="unassigned">未割当</option>
-            {profiles.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
+          {/* Active filter tags */}
+          {activeFilterCount > 0 && (
+            <div className="flex items-center gap-2 flex-wrap">
+              {Object.entries(columnFilters).map(([col, vals]) => {
+                const labels = col === 'assigned_to'
+                  ? Array.from(vals).map(v => v === '__unassigned__' ? '未割当' : (profiles.find(p => p.id === v)?.name || v))
+                  : col === 'status'
+                  ? Array.from(vals).map(v => LEAD_STATUS_LABELS[v as LeadStatus] || v)
+                  : col === 'lead_source'
+                  ? Array.from(vals).map(v => LEAD_SOURCE_LABELS[v as LeadSource] || v)
+                  : col === 'priority'
+                  ? Array.from(vals).map(v => v || '未設定')
+                  : col === 'hs_listing_plan'
+                  ? Array.from(vals).map(v => v ? v.replace('プラン', '') : '未設定')
+                  : col === 'hs_deal_exists'
+                  ? Array.from(vals).map(v => v === 'true' ? '商談あり' : '商談なし')
+                  : Array.from(vals);
+                return (
+                  <span key={col} className="inline-flex items-center gap-1 px-2 py-1 bg-blue-50 text-blue-700 rounded-md text-xs font-medium">
+                    {COLUMN_LABELS[col]}: {labels.join(', ')}
+                    <button
+                      onClick={() => clearColumnFilter(col)}
+                      className="ml-0.5 hover:text-blue-900"
+                    >
+                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </span>
+                );
+              })}
+              {excludeDeal && (
+                <span className="inline-flex items-center gap-1 px-2 py-1 bg-red-50 text-red-700 rounded-md text-xs font-medium">
+                  商談済み除外
+                  <button onClick={() => { setExcludeDeal(false); setPage(0); }} className="ml-0.5 hover:text-red-900">
+                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </span>
+              )}
+              {excludeHasNextActivity && (
+                <span className="inline-flex items-center gap-1 px-2 py-1 bg-teal-50 text-teal-700 rounded-md text-xs font-medium">
+                  次回予定あり除外
+                  <button onClick={() => { setExcludeHasNextActivity(false); setPage(0); }} className="ml-0.5 hover:text-teal-900">
+                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </span>
+              )}
+              <button
+                onClick={clearAllFilters}
+                className="text-xs text-gray-500 hover:text-gray-700 underline"
+              >
+                全解除
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Table */}
@@ -1818,23 +1987,131 @@ function LeadsPage() {
                           className="rounded border-gray-300"
                         />
                       </th>
-                      {columnOrder.map((key) => (
-                        <th
-                          key={key}
-                          draggable
-                          onDragStart={() => handleColumnDragStart(key)}
-                          onDragOver={(e) => handleColumnDragOver(e, key)}
-                          onDrop={() => handleColumnDrop(key)}
-                          onDragEnd={handleColumnDragEnd}
-                          onClick={() => toggleSort(key)}
-                          className={`text-left py-3 px-3 text-sm font-medium text-gray-500 cursor-grab hover:text-gray-700 select-none bg-gray-50 ${
-                            dragOverColumn === key ? 'border-l-2 border-blue-400' : ''
-                          }`}
-                        >
-                          {COLUMN_LABELS[key] || key}
-                          {sortColumn === key ? (sortAscending ? ' ▲' : ' ▼') : ''}
-                        </th>
-                      ))}
+                      {visibleColumns.map((key) => {
+                        const isFilterable = key in FILTERABLE_COLUMNS;
+                        const hasFilter = !!columnFilters[key]?.size;
+                        return (
+                          <th
+                            key={key}
+                            draggable
+                            onDragStart={() => handleColumnDragStart(key)}
+                            onDragOver={(e) => handleColumnDragOver(e, key)}
+                            onDrop={() => handleColumnDrop(key)}
+                            onDragEnd={handleColumnDragEnd}
+                            className={`text-left py-2 px-3 text-sm font-medium text-gray-500 cursor-grab select-none bg-gray-50 relative ${
+                              dragOverColumn === key ? 'border-l-2 border-blue-400' : ''
+                            } ${hasFilter ? 'text-blue-600' : ''}`}
+                          >
+                            <div className="flex items-center gap-1">
+                              <span
+                                onClick={() => toggleSort(key)}
+                                className="hover:text-gray-700 cursor-pointer truncate"
+                              >
+                                {COLUMN_LABELS[key] || key}
+                                {sortColumn === key ? (sortAscending ? ' ▲' : ' ▼') : ''}
+                              </span>
+                              {isFilterable && (
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); setOpenFilterColumn(openFilterColumn === key ? null : key); }}
+                                  className={`flex-shrink-0 p-0.5 rounded hover:bg-gray-200 transition-colors ${hasFilter ? 'text-blue-600' : 'text-gray-400'}`}
+                                  title={`${COLUMN_LABELS[key]}でフィルター`}
+                                >
+                                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+                                  </svg>
+                                </button>
+                              )}
+                            </div>
+                            {/* Filter dropdown */}
+                            {isFilterable && openFilterColumn === key && (
+                              <>
+                                <div className="fixed inset-0 z-20" onClick={() => setOpenFilterColumn(null)} />
+                                <div className="absolute left-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-30 min-w-[200px] py-1 max-h-[320px] overflow-y-auto">
+                                  <div className="flex items-center justify-between px-3 py-1.5 border-b border-gray-100">
+                                    <span className="text-xs font-medium text-gray-500">{COLUMN_LABELS[key]}フィルター</span>
+                                    {hasFilter && (
+                                      <button
+                                        onClick={(e) => { e.stopPropagation(); clearColumnFilter(key); }}
+                                        className="text-xs text-blue-600 hover:text-blue-800"
+                                      >
+                                        クリア
+                                      </button>
+                                    )}
+                                  </div>
+                                  {key === 'assigned_to' ? (
+                                    <>
+                                      <label className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-gray-50 cursor-pointer">
+                                        <input
+                                          type="checkbox"
+                                          checked={columnFilters.assigned_to?.has('__unassigned__') || false}
+                                          onChange={() => toggleColumnFilter('assigned_to', '__unassigned__')}
+                                          className="rounded border-gray-300"
+                                        />
+                                        <span className="text-gray-500">未割当</span>
+                                      </label>
+                                      {profiles.map((p) => (
+                                        <label key={p.id} className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-gray-50 cursor-pointer">
+                                          <input
+                                            type="checkbox"
+                                            checked={columnFilters.assigned_to?.has(p.id) || false}
+                                            onChange={() => toggleColumnFilter('assigned_to', p.id)}
+                                            className="rounded border-gray-300"
+                                          />
+                                          {p.name}
+                                        </label>
+                                      ))}
+                                    </>
+                                  ) : (
+                                    Object.entries(
+                                      FILTERABLE_COLUMNS[key]?.options || {}
+                                    ).map(([val, label]) => {
+                                      const colors = FILTERABLE_COLUMNS[key]?.colors || {};
+                                      return (
+                                        <label key={val} className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-gray-50 cursor-pointer">
+                                          <input
+                                            type="checkbox"
+                                            checked={columnFilters[key]?.has(val) || false}
+                                            onChange={() => toggleColumnFilter(key, val)}
+                                            className="rounded border-gray-300"
+                                          />
+                                          <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${colors[val] || 'bg-gray-100 text-gray-800'}`}>
+                                            {label}
+                                          </span>
+                                        </label>
+                                      );
+                                    })
+                                  )}
+                                  {/* Extra options for status column */}
+                                  {key === 'status' && (
+                                    <>
+                                      <div className="border-t border-gray-100 my-1" />
+                                      <p className="px-3 py-1 text-xs text-gray-400">その他</p>
+                                      <label className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-gray-50 cursor-pointer">
+                                        <input
+                                          type="checkbox"
+                                          checked={excludeDeal}
+                                          onChange={() => { setExcludeDeal(!excludeDeal); setPage(0); }}
+                                          className="rounded border-gray-300"
+                                        />
+                                        <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">商談済みを除外</span>
+                                      </label>
+                                      <label className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-gray-50 cursor-pointer">
+                                        <input
+                                          type="checkbox"
+                                          checked={excludeHasNextActivity}
+                                          onChange={() => { setExcludeHasNextActivity(!excludeHasNextActivity); setPage(0); }}
+                                          className="rounded border-gray-300"
+                                        />
+                                        <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-teal-100 text-teal-700">次回予定ありを除外</span>
+                                      </label>
+                                    </>
+                                  )}
+                                </div>
+                              </>
+                            )}
+                          </th>
+                        );
+                      })}
                     </tr>
                   </thead>
                   <tbody>
@@ -1855,7 +2132,7 @@ function LeadsPage() {
                             className="rounded border-gray-300"
                           />
                         </td>
-                        {columnOrder.map((colKey) => renderCell(lead, colKey))}
+                        {visibleColumns.map((colKey) => renderCell(lead, colKey))}
                       </tr>
                     ))}
                   </tbody>
@@ -2013,6 +2290,51 @@ function LeadsPage() {
                 )}
               </div>
 
+              {/* HubSpot Email History */}
+              <div className="px-4 py-3 border-b border-gray-100">
+                <button
+                  onClick={() => {
+                    if (!showHsEmails) {
+                      setShowHsEmails(true);
+                      loadHsEmails(selectedLead);
+                    } else {
+                      setShowHsEmails(false);
+                    }
+                  }}
+                  className="flex items-center gap-1 text-xs font-semibold text-gray-700 hover:text-blue-600 w-full"
+                >
+                  <svg className={`w-3 h-3 transition-transform ${showHsEmails ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
+                  HubSpotメール履歴
+                  {hsEmailHistory.length > 0 && <span className="text-gray-400 font-normal">({hsEmailHistory.length}件)</span>}
+                </button>
+                {showHsEmails && (
+                  <div className="mt-2 space-y-2">
+                    {hsEmailLoading ? (
+                      <p className="text-xs text-gray-400">読み込み中...</p>
+                    ) : hsEmailHistory.length === 0 ? (
+                      <p className="text-xs text-gray-400">メール履歴なし</p>
+                    ) : (
+                      hsEmailHistory.map((act) => (
+                        <div key={act.id} className="p-2 bg-gray-50 rounded text-xs space-y-0.5">
+                          <div className="flex items-center gap-1.5">
+                            <span className={`px-1 py-0.5 rounded text-[10px] font-medium ${act.direction === 'OUTGOING' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}`}>
+                              {act.direction === 'OUTGOING' ? '送信' : '受信'}
+                            </span>
+                            <span className="text-gray-400">
+                              {act.timestamp ? new Date(act.timestamp).toLocaleDateString('ja-JP', { month: 'short', day: 'numeric' }) : ''}
+                            </span>
+                          </div>
+                          <div className="font-medium text-gray-700 truncate">{act.subject}</div>
+                          {act.bodyPreview && <div className="text-gray-400 line-clamp-2">{act.bodyPreview}</div>}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+
               {/* Next Activity Date */}
               <div className="px-4 py-3 border-b border-gray-100">
                 <label className="block text-xs font-medium text-gray-500 mb-1">次回活動予定日</label>
@@ -2092,6 +2414,9 @@ function LeadsPage() {
                 )}
                 {selectedLead.hs_deal_exists && selectedLead.hs_deal_created_at && (
                   <p className="mt-0.5 text-xs text-gray-600">取引作成日: {new Date(selectedLead.hs_deal_created_at).toLocaleDateString('ja-JP')}</p>
+                )}
+                {selectedLead.hs_listing_plan && (
+                  <p className="mt-1 text-xs text-gray-600">掲載プラン: {selectedLead.hs_listing_plan}</p>
                 )}
                 {selectedLead.hs_checked_at && (
                   <p className="mt-1 text-[10px] text-gray-400">最終チェック: {new Date(selectedLead.hs_checked_at).toLocaleString('ja-JP')}</p>

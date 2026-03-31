@@ -1,5 +1,106 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from '@google/generative-ai';
+import Anthropic from '@anthropic-ai/sdk';
+
+const HUBSPOT_API = 'https://api.hubapi.com';
+
+interface HubSpotEmail {
+  subject: string;
+  bodyPreview: string;
+  direction: string;
+  timestamp: string;
+}
+
+async function fetchHubSpotHistory(companyName: string, email: string): Promise<HubSpotEmail[]> {
+  const token = process.env.HUBSPOT_TOKEN;
+  if (!token) return [];
+
+  try {
+    // Search by contact email first
+    let contactId: number | null = null;
+    if (email) {
+      const res = await fetch(
+        `${HUBSPOT_API}/crm/v3/objects/contacts/${encodeURIComponent(email)}?idProperty=email`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        contactId = data.id ? Number(data.id) : null;
+      }
+    }
+
+    // Get email IDs from associations
+    let emailIds: string[] = [];
+    if (contactId) {
+      const assocRes = await fetch(
+        `${HUBSPOT_API}/crm/v3/objects/contacts/${contactId}/associations/emails`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (assocRes.ok) {
+        const data = await assocRes.json();
+        emailIds = (data.results || []).map((r: Record<string, unknown>) => String(r.id || '')).filter((id: string) => id);
+      }
+    }
+
+    // Fallback: search by company
+    if (emailIds.length === 0 && companyName) {
+      const compRes = await fetch(`${HUBSPOT_API}/crm/v3/objects/companies/search`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: companyName, properties: ['name'], limit: 5 }),
+      });
+      if (compRes.ok) {
+        const data = await compRes.json();
+        const companyId = data.results?.[0]?.id ? Number(data.results[0].id) : null;
+        if (companyId) {
+          const assocRes = await fetch(
+            `${HUBSPOT_API}/crm/v3/objects/companies/${companyId}/associations/emails`,
+            { headers: { Authorization: `Bearer ${token}` } }
+          );
+          if (assocRes.ok) {
+            const data = await assocRes.json();
+            emailIds = (data.results || []).map((r: Record<string, unknown>) => String(r.id || '')).filter((id: string) => id);
+          }
+        }
+      }
+    }
+
+    if (emailIds.length === 0) return [];
+
+    // Fetch email details (up to 20 most recent)
+    const batch = emailIds.slice(0, 20);
+    const searchRes = await fetch(`${HUBSPOT_API}/crm/v3/objects/emails/search`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filterGroups: [{
+          filters: [{
+            propertyName: 'hs_object_id',
+            operator: 'IN',
+            values: batch,
+          }],
+        }],
+        properties: ['hs_email_subject', 'hs_email_text', 'hs_email_direction', 'hs_timestamp'],
+        limit: 20,
+      }),
+    });
+
+    if (!searchRes.ok) return [];
+
+    const searchData = await searchRes.json();
+    const emails: HubSpotEmail[] = (searchData.results || []).map((r: { properties: Record<string, string> }) => ({
+      subject: r.properties.hs_email_subject || '(件名なし)',
+      bodyPreview: (r.properties.hs_email_text || '').slice(0, 500),
+      direction: (r.properties.hs_email_direction || '').includes('INCOMING') ? '相手→自社' : '自社→相手',
+      timestamp: r.properties.hs_timestamp || '',
+    }));
+
+    // Sort by timestamp descending, return latest 10
+    emails.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    return emails.slice(0, 10);
+  } catch {
+    return [];
+  }
+}
 
 const DIGIMA_CONTEXT = `
 あなたは株式会社Resorzの営業担当です。「Digima〜出島〜」という有料サービスへの掲載・参画を提案するメールを作成します。
@@ -36,25 +137,15 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { lead, template_type } = body;
 
-    const apiKey = process.env.GEMINI_API_KEY;
+    const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
       return NextResponse.json(
-        { error: 'GEMINI_API_KEY が設定されていません。.env.local に追加してください。' },
+        { error: 'ANTHROPIC_API_KEY が設定されていません。.env.local に追加してください。' },
         { status: 500 }
       );
     }
 
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const safetySettings = [
-      { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-      { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
-      { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
-      { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-    ];
-    const model = genAI.getGenerativeModel({
-      model: 'gemini-2.0-flash',
-      safetySettings,
-    });
+    const client = new Anthropic({ apiKey });
 
     const leadInfo = `
 【送信先リード情報】
@@ -106,10 +197,33 @@ export async function POST(request: NextRequest) {
 
     const instruction = templateInstructions[template_type] || templateInstructions.initial;
 
+    // Fetch HubSpot email history for context
+    const emailHistory = await fetchHubSpotHistory(lead.company_name || '', lead.email || '');
+
+    let historyContext = '';
+    if (emailHistory.length > 0) {
+      const historyLines = emailHistory.map((e, i) =>
+        `${i + 1}. [${e.timestamp ? new Date(e.timestamp).toLocaleDateString('ja-JP') : '日付不明'}] ${e.direction} | 件名: ${e.subject}\n   内容: ${e.bodyPreview}`
+      ).join('\n');
+
+      historyContext = `
+【過去のやりとり履歴（HubSpot）】
+この企業とは既にメールのやりとりがあります。以下の履歴を踏まえてメールを作成してください。
+${historyLines}
+
+【履歴を踏まえた作成ルール】
+- 過去のやりとりの内容・文脈を自然に反映させる（「以前ご案内させていただきました〜」「その後ご検討状況は〜」等）
+- 前回の話題やテーマとの一貫性を保つ
+- 既に伝えた情報を繰り返さず、新しい価値・切り口を提供する
+- 相手が返信している場合、その内容に対する応答を含める
+- 挨拶は初回ではないので「お世話になっております。」を使う
+`;
+    }
+
     const prompt = `${DIGIMA_CONTEXT}
 
 ${leadInfo}
-
+${historyContext}
 【作成するメールの種類】
 ${instruction}
 
@@ -137,56 +251,41 @@ ${instruction}
 
 （ここに本文）`;
 
-    // リトライ付きで生成（最大3回）
-    let lastError: unknown = null;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        const result = await model.generateContent(prompt);
-        const response = result.response;
+    const message = await client.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1024,
+      messages: [{ role: 'user', content: prompt }],
+    });
 
-        // 安全性フィルタでブロックされた場合
-        if (response.candidates?.[0]?.finishReason === 'SAFETY') {
-          console.warn(`Attempt ${attempt + 1}: Safety filter blocked generation`);
-          lastError = new Error('安全性フィルタによりブロックされました');
-          continue;
-        }
+    const text = message.content[0].type === 'text' ? message.content[0].text : '';
 
-        const text = response.text();
-        if (!text || text.trim().length === 0) {
-          console.warn(`Attempt ${attempt + 1}: Empty response`);
-          lastError = new Error('空のレスポンス');
-          continue;
-        }
-
-        // Parse subject and body
-        let subject = '';
-        let emailBody = text;
-
-        const subjectMatch = text.match(/^件名[:：]\s*(.+?)(?:\n|$)/m);
-        if (subjectMatch) {
-          subject = subjectMatch[1].trim();
-          emailBody = text.slice(subjectMatch.index! + subjectMatch[0].length).trim();
-        }
-
-        // 件名が取れなかった場合のフォールバック
-        if (!subject) {
-          subject = `【Digima〜出島〜】リード獲得サービスのご案内 - ${lead.company_name || ''}`;
-        }
-
-        return NextResponse.json({ subject, body: emailBody });
-      } catch (e) {
-        console.warn(`Attempt ${attempt + 1} failed:`, e);
-        lastError = e;
-      }
+    if (!text || text.trim().length === 0) {
+      return NextResponse.json(
+        { error: 'メール生成に失敗しました（空のレスポンス）。再度お試しください。' },
+        { status: 500 }
+      );
     }
 
-    // 3回とも失敗
-    const errorMessage = lastError instanceof Error ? lastError.message : String(lastError);
-    console.error('Email generation failed after 3 attempts:', errorMessage);
-    return NextResponse.json(
-      { error: `メール生成に失敗しました（${errorMessage}）。再度お試しください。` },
-      { status: 500 }
-    );
+    // Parse subject and body
+    let subject = '';
+    let emailBody = text;
+
+    const subjectMatch = text.match(/^件名[:：]\s*(.+?)(?:\n|$)/m);
+    if (subjectMatch) {
+      subject = subjectMatch[1].trim();
+      emailBody = text.slice(subjectMatch.index! + subjectMatch[0].length).trim();
+    }
+
+    if (!subject) {
+      subject = `【Digima〜出島〜】リード獲得サービスのご案内 - ${lead.company_name || ''}`;
+    }
+
+    return NextResponse.json({
+      subject,
+      body: emailBody,
+      hasHistory: emailHistory.length > 0,
+      historyCount: emailHistory.length,
+    });
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error('Email generation error:', errorMessage);

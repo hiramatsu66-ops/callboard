@@ -25,17 +25,34 @@ const QUALIFIED_STAGES = new Set([
   '1016011424', // 受注
 ]);
 
+// 受注ステージ
+const WON_STAGES = new Set([
+  '1009228167', // 事業開発パイプライン 受注
+  '1016011424', // もう1つのパイプライン 受注
+]);
+
+// 掲載プランで対象外にする値
+const ACTIVE_PLANS = new Set(['プレミアムプラン', 'ベーシックプラン', 'ライトプラン']);
+
 interface DealInfo {
   exists: boolean;
   ownerName: string;
   createdAt: string | null;
   dealStage: string;
+  shouldExclude: boolean; // 受注済み or 有料プラン利用中
+  excludeReason: string;
+  listingPlan: string; // 掲載プラン
 }
 
-async function searchCompanyIds(
+interface CompanyInfo {
+  id: string;
+  plan: string;
+}
+
+async function searchCompanies(
   query: string,
   token: string
-): Promise<string[]> {
+): Promise<CompanyInfo[]> {
   const res = await fetch(`${HUBSPOT_API}/crm/v3/objects/companies/search`, {
     method: 'POST',
     headers: {
@@ -44,7 +61,7 @@ async function searchCompanyIds(
     },
     body: JSON.stringify({
       query,
-      properties: ['name', 'num_associated_deals', 'domain'],
+      properties: ['name', 'num_associated_deals', 'domain', 'plan'],
       limit: 10,
     }),
   });
@@ -55,7 +72,10 @@ async function searchCompanyIds(
     .filter((c: { properties: Record<string, string> }) =>
       parseInt(c.properties.num_associated_deals || '0') > 0
     )
-    .map((c: { id: string }) => c.id);
+    .map((c: { id: string; properties: Record<string, string> }) => ({
+      id: c.id,
+      plan: c.properties.plan || '',
+    }));
 }
 
 function extractDomain(url: string): string {
@@ -192,22 +212,44 @@ async function getDealsForContact(
   return (data.results || []).map((r: { properties: Record<string, string> }) => r.properties);
 }
 
-async function findQualifiedDeal(
-  companyIds: string[],
+function pickBestDeal(
+  deals: { dealname: string; hubspot_owner_id: string; createdate: string; dealstage: string }[],
+  ownerMap: Map<string, string>,
+  companyPlan: string = ''
+): DealInfo | null {
+  if (deals.length === 0) return null;
+  // Prefer qualified stage deal, otherwise use the most recent deal
+  const qualifiedDeal = deals.find(d => QUALIFIED_STAGES.has(d.dealstage));
+  const best = qualifiedDeal || deals[0]; // deals are sorted by createdate DESC
+
+  // Check exclusion: any deal ever reached 受注, or active plan
+  const hasWonDeal = deals.some(d => WON_STAGES.has(d.dealstage));
+  const hasActivePlan = ACTIVE_PLANS.has(companyPlan);
+  const shouldExclude = hasWonDeal || hasActivePlan;
+  const excludeReason = hasWonDeal && hasActivePlan
+    ? '受注済み・有料プラン利用中'
+    : hasWonDeal ? '受注済み' : hasActivePlan ? '有料プラン利用中' : '';
+
+  return {
+    exists: true,
+    ownerName: ownerMap.get(best.hubspot_owner_id) || '',
+    createdAt: best.createdate || null,
+    dealStage: best.dealstage,
+    shouldExclude,
+    excludeReason,
+    listingPlan: companyPlan,
+  };
+}
+
+async function findDealForCompanies(
+  companies: CompanyInfo[],
   token: string,
   ownerMap: Map<string, string>
 ): Promise<DealInfo | null> {
-  for (const companyId of companyIds) {
-    const deals = await getDealsForCompany(companyId, token);
-    const qualifiedDeal = deals.find(d => QUALIFIED_STAGES.has(d.dealstage));
-    if (qualifiedDeal) {
-      return {
-        exists: true,
-        ownerName: ownerMap.get(qualifiedDeal.hubspot_owner_id) || '',
-        createdAt: qualifiedDeal.createdate || null,
-        dealStage: qualifiedDeal.dealstage,
-      };
-    }
+  for (const company of companies) {
+    const deals = await getDealsForCompany(company.id, token);
+    const result = pickBestDeal(deals, ownerMap, company.plan);
+    if (result) return result;
   }
   return null;
 }
@@ -220,23 +262,34 @@ async function checkCompanyDeal(
   token: string,
   ownerMap: Map<string, string>
 ): Promise<DealInfo> {
-  const noDeal: DealInfo = { exists: false, ownerName: '', createdAt: null, dealStage: '' };
+  const noDeal: DealInfo = { exists: false, ownerName: '', createdAt: null, dealStage: '', shouldExclude: false, excludeReason: '', listingPlan: '' };
 
   // 1. 会社名で検索
-  let companyIds = await searchCompanyIds(companyName, token);
+  let companies = await searchCompanies(companyName, token);
 
   // 2. ドメインで検索
-  if (companyIds.length === 0) {
+  if (companies.length === 0) {
     const domain = extractDomain(homepage);
     if (domain) {
-      companyIds = await searchCompanyIds(domain, token);
+      companies = await searchCompanies(domain, token);
     }
   }
 
+  // 会社の有料プランチェック（取引がなくてもプランで除外判定する）
+  const companyPlan = companies.length > 0 ? companies[0].plan : '';
+  if (!companies.length && companyPlan === '' ) {
+    // no companies found, continue to contact search
+  }
+
   // 会社が見つかった場合、商談チェック
-  if (companyIds.length > 0) {
-    const result = await findQualifiedDeal(companyIds, token, ownerMap);
+  if (companies.length > 0) {
+    const result = await findDealForCompanies(companies, token, ownerMap);
     if (result) return result;
+
+    // 取引なしでもプランがある場合は除外対象
+    if (ACTIVE_PLANS.has(companyPlan)) {
+      return { ...noDeal, shouldExclude: true, excludeReason: '有料プラン利用中', listingPlan: companyPlan };
+    }
   }
 
   // 3. メールアドレスでコンタクト検索 → コンタクトに紐づく商談を直接検索
@@ -245,15 +298,8 @@ async function checkCompanyDeal(
     const contactIds = directContactId ? [directContactId] : await searchContactIds(email, token);
     for (const contactId of contactIds) {
       const deals = await getDealsForContact(contactId, token);
-      const qualifiedDeal = deals.find(d => QUALIFIED_STAGES.has(d.dealstage));
-      if (qualifiedDeal) {
-        return {
-          exists: true,
-          ownerName: ownerMap.get(qualifiedDeal.hubspot_owner_id) || '',
-          createdAt: qualifiedDeal.createdate || null,
-          dealStage: qualifiedDeal.dealstage,
-        };
-      }
+      const result = pickBestDeal(deals, ownerMap, companyPlan);
+      if (result) return result;
     }
   }
 
@@ -262,19 +308,12 @@ async function checkCompanyDeal(
     const contactIds = await searchContactIds(contactName, token);
     for (const contactId of contactIds) {
       const deals = await getDealsForContact(contactId, token);
-      const qualifiedDeal = deals.find(d => QUALIFIED_STAGES.has(d.dealstage));
-      if (qualifiedDeal) {
-        return {
-          exists: true,
-          ownerName: ownerMap.get(qualifiedDeal.hubspot_owner_id) || '',
-          createdAt: qualifiedDeal.createdate || null,
-          dealStage: qualifiedDeal.dealstage,
-        };
-      }
+      const result = pickBestDeal(deals, ownerMap, companyPlan);
+      if (result) return result;
     }
   }
 
-  return noDeal;
+  return { ...noDeal, listingPlan: companyPlan };
 }
 
 export async function POST(request: NextRequest) {
@@ -295,14 +334,23 @@ export async function POST(request: NextRequest) {
     const now = new Date().toISOString();
 
     const supabase = createAdminClient();
+    const updateData: Record<string, unknown> = {
+      hs_deal_exists: dealInfo.exists,
+      hs_checked_at: now,
+      hs_deal_owner: dealInfo.ownerName,
+      hs_deal_created_at: dealInfo.createdAt,
+      hs_listing_plan: dealInfo.listingPlan,
+    };
+
+    // 受注済みまたは有料プラン利用中の場合、自動的にステータスを対象外に
+    if (dealInfo.shouldExclude) {
+      updateData.status = 'excluded';
+      updateData.memo = dealInfo.excludeReason;
+    }
+
     await supabase
       .from('leads')
-      .update({
-        hs_deal_exists: dealInfo.exists,
-        hs_checked_at: now,
-        hs_deal_owner: dealInfo.ownerName,
-        hs_deal_created_at: dealInfo.createdAt,
-      })
+      .update(updateData)
       .eq('id', lead_id);
 
     return NextResponse.json({
@@ -310,6 +358,9 @@ export async function POST(request: NextRequest) {
       checked_at: now,
       deal_owner: dealInfo.ownerName,
       deal_created_at: dealInfo.createdAt,
+      should_exclude: dealInfo.shouldExclude,
+      exclude_reason: dealInfo.excludeReason,
+      listing_plan: dealInfo.listingPlan,
     });
   } catch (error) {
     console.error('HubSpot check error:', error);
