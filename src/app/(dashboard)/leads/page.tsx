@@ -95,6 +95,7 @@ function LeadsPage() {
   const [loading, setLoading] = useState(true);
   const [showImportModal, setShowImportModal] = useState(false);
   const [csvData, setCsvData] = useState<Record<string, string>[]>([]);
+  const [csvColumnMapping, setCsvColumnMapping] = useState<Record<string, string>>({});
   const [importing, setImporting] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const [hsImporting, setHsImporting] = useState(false);
@@ -1107,6 +1108,32 @@ function LeadsPage() {
     loadLeads();
   };
 
+  // Auto-detect column mapping based on CSV header names
+  const autoDetectMapping = (headers: string[]): Record<string, string> => {
+    const mapping: Record<string, string> = {};
+    const patterns: Record<string, string[]> = {
+      company_name: ['会社名', 'company_name', '会社', '企業名', '法人名'],
+      phone: ['電話番号', 'phone', '電話', 'TEL', 'tel'],
+      contact_name: ['担当者名', 'contact_name', '担当者', '氏名', '名前', '担当'],
+      email: ['メールアドレス', 'email', 'メール', 'Email', 'E-mail', 'mail'],
+      homepage: ['HP', 'homepage', 'URL', 'ホームページ', 'WebサイトURL', 'Webサイト', 'url', 'ウェブサイト'],
+      lead_source: ['流入経路', 'lead_source', '経路', 'ソース', '登録経路'],
+      inquiry_date: ['問い合わせ日', 'inquiry_date', '問合せ日', '登録日', '日付'],
+      inquiry_content: ['問い合わせ内容', 'inquiry_content', '問合せ内容', '内容'],
+      memo: ['メモ', 'memo', '備考', 'ノート', 'note'],
+    };
+    for (const [field, candidates] of Object.entries(patterns)) {
+      for (const header of headers) {
+        const h = header.trim();
+        if (candidates.some(c => h === c || h.toLowerCase() === c.toLowerCase())) {
+          mapping[field] = header;
+          break;
+        }
+      }
+    }
+    return mapping;
+  };
+
   const handleCSVUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -1116,75 +1143,67 @@ function LeadsPage() {
       skipEmptyLines: 'greedy',
       transformHeader: (h: string) => h.trim().replace(/^\uFEFF/, ''),
       complete: (results) => {
-        console.log('CSV headers:', Object.keys((results.data as Record<string, string>[])[0] || {}));
-        console.log('CSV first 3 rows:', (results.data as Record<string, string>[]).slice(0, 3));
-        setCsvData(results.data as Record<string, string>[]);
+        const data = results.data as Record<string, string>[];
+        setCsvData(data);
+        if (data.length > 0) {
+          const headers = Object.keys(data[0]);
+          setCsvColumnMapping(autoDetectMapping(headers));
+        }
       },
     });
   };
 
   const handleImport = async () => {
     if (csvData.length === 0) return;
+    if (!csvColumnMapping.company_name || !csvColumnMapping.phone) {
+      alert('「会社名」と「電話番号」の列を選択してください。');
+      return;
+    }
     setImporting(true);
 
-    const leadsToInsert = csvData.map((row) => {
-      // Trim keys to handle BOM or whitespace in CSV headers
-      const r: Record<string, string> = {};
-      for (const [k, v] of Object.entries(row)) {
-        r[k.trim().replace(/^\uFEFF/, '')] = (v || '').trim();
+    const mapLeadSource = (raw: string): string => {
+      if (!raw) return '';
+      if (Object.keys(LEAD_SOURCE_LABELS).includes(raw)) return raw;
+      const sourceMapping: Record<string, string> = {
+        '過去問い合わせ': 'past_inquiry', '問い合わせ': 'past_inquiry', 'inquiry': 'past_inquiry',
+        '失注': 'lost_deal', '失注案件': 'lost_deal',
+        'ターゲット': 'target_list', 'ターゲットリスト': 'target_list', '検索追加': 'target_list',
+        'セミナー': 'seminar', 'イベント': 'seminar', 'EXPO': 'seminar',
+        '紹介': 'referral',
+        'インバウンド': 'inbound', 'Web': 'inbound', 'HP': 'inbound',
+        '外部リスト': 'external_list', '購入リスト': 'external_list',
+      };
+      for (const [k, v] of Object.entries(sourceMapping)) {
+        if (raw.includes(k)) return v;
       }
-      return r;
-    }).map((r) => ({
-      company_name: r['会社名'] || r['company_name'] || '',
-      phone: r['電話番号'] || r['phone'] || '',
-      contact_name: r['担当者名'] || r['contact_name'] || '',
-      email: r['メールアドレス'] || r['email'] || '',
-      homepage: r['HP'] || r['homepage'] || r['URL'] || '',
-      lead_source: (() => {
-        const raw = r['流入経路'] || r['lead_source'] || '';
-        if (Object.keys(LEAD_SOURCE_LABELS).includes(raw)) return raw;
-        const mapping: Record<string, string> = {
-          '過去問い合わせ': 'past_inquiry', '問い合わせ': 'past_inquiry', 'inquiry': 'past_inquiry',
-          '失注': 'lost_deal', '失注案件': 'lost_deal',
-          'ターゲット': 'target_list', 'ターゲットリスト': 'target_list', '検索追加': 'target_list',
-          'セミナー': 'seminar', 'イベント': 'seminar', 'EXPO': 'seminar',
-          '紹介': 'referral',
-          'インバウンド': 'inbound', 'Web': 'inbound', 'HP': 'inbound',
-          '外部リスト': 'external_list', '購入リスト': 'external_list',
-        };
-        for (const [k, v] of Object.entries(mapping)) {
-          if (raw.includes(k)) return v;
-        }
-        return raw ? 'other' : '';
-      })(),
-      inquiry_date: r['問い合わせ日'] || r['inquiry_date'] || null,
-      inquiry_content: r['問い合わせ内容'] || r['inquiry_content'] || '',
-      status: 'new' as const,
-      memo: r['メモ'] || r['memo'] || '',
-    }));
+      return 'other';
+    };
 
-    // Debug: log first few mapped leads
-    console.log('Mapped leads (first 3):', leadsToInsert.slice(0, 3));
-    console.log('Total mapped:', leadsToInsert.length);
+    const m = csvColumnMapping;
+    const leadsToInsert = csvData.map((row) => ({
+      company_name: (m.company_name ? row[m.company_name] : '')?.trim() || '',
+      phone: (m.phone ? row[m.phone] : '')?.trim() || '',
+      contact_name: (m.contact_name ? row[m.contact_name] : '')?.trim() || '',
+      email: (m.email ? row[m.email] : '')?.trim() || '',
+      homepage: (m.homepage ? row[m.homepage] : '')?.trim() || '',
+      lead_source: mapLeadSource((m.lead_source ? row[m.lead_source] : '')?.trim() || ''),
+      inquiry_date: (m.inquiry_date ? row[m.inquiry_date] : '')?.trim() || null,
+      inquiry_content: (m.inquiry_content ? row[m.inquiry_content] : '')?.trim() || '',
+      status: 'new' as const,
+      memo: (m.memo ? row[m.memo] : '')?.trim() || '',
+    }));
 
     const validLeads = leadsToInsert.filter(
       (l) => l.company_name && l.phone
     );
 
-    console.log('Valid leads:', validLeads.length, 'Invalid:', leadsToInsert.length - validLeads.length);
-    if (validLeads.length < leadsToInsert.length) {
-      const invalid = leadsToInsert.filter(l => !l.company_name || !l.phone);
-      console.log('First invalid lead:', invalid[0]);
-    }
-
     if (validLeads.length === 0) {
-      const sampleRow = csvData[0] ? Object.keys(csvData[0]).join(', ') : '(なし)';
-      alert(`会社名と電話番号の両方が入った行が見つかりませんでした。\n\nCSVの列名: ${sampleRow}\n\n「会社名」「電話番号」の列が必要です。`);
+      alert(`会社名と電話番号の両方が入った行が見つかりませんでした（${leadsToInsert.length}件中0件）。\n列の割り当てを確認してください。`);
       setImporting(false);
       return;
     }
 
-    // Check duplicates by company_name
+    // Check duplicates by company_name, email, phone
     const names = validLeads.map(l => l.company_name);
     const { data: existingByName } = await supabase
       .from('leads')
@@ -1192,7 +1211,6 @@ function LeadsPage() {
       .in('company_name', names);
     const dupNames = new Set((existingByName || []).map(r => r.company_name));
 
-    // Check duplicates by email
     const emails = validLeads.map(l => l.email).filter(e => e);
     let dupEmails = new Set<string>();
     if (emails.length > 0) {
@@ -1203,7 +1221,6 @@ function LeadsPage() {
       dupEmails = new Set((existingByEmail || []).map(r => r.email));
     }
 
-    // Check duplicates by phone
     const phones = validLeads.map(l => l.phone).filter(p => p);
     let dupPhones = new Set<string>();
     if (phones.length > 0) {
@@ -1230,7 +1247,7 @@ function LeadsPage() {
       }
     }
 
-    const { error, count } = await supabase.from('leads').insert(newLeads).select('id', { count: 'exact', head: true });
+    const { error } = await supabase.from('leads').insert(newLeads);
 
     if (error) {
       console.error('Import error:', error);
@@ -1239,9 +1256,10 @@ function LeadsPage() {
       return;
     }
 
-    alert(`${newLeads.length}件のリードをインポートしました。`);
+    alert(`${newLeads.length}件のリードをインポートしました。${skipped > 0 ? `（${skipped}件は重複スキップ）` : ''}`);
     setShowImportModal(false);
     setCsvData([]);
+    setCsvColumnMapping({});
     setImporting(false);
     setPage(0);
     loadLeads();
@@ -2983,8 +3001,8 @@ function LeadsPage() {
       {showImportModal && (
         <div
           className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
-          onClick={() => { setShowImportModal(false); setCsvData([]); }}
-          onKeyDown={(e) => { if (e.key === 'Escape') { setShowImportModal(false); setCsvData([]); } }}
+          onClick={() => { setShowImportModal(false); setCsvData([]); setCsvColumnMapping({}); }}
+          onKeyDown={(e) => { if (e.key === 'Escape') { setShowImportModal(false); setCsvData([]); setCsvColumnMapping({}); } }}
           tabIndex={-1}
           ref={(el) => el?.focus()}
         >
@@ -3050,48 +3068,68 @@ function LeadsPage() {
               />
 
               {csvData.length > 0 && (
-                <div className="mt-4">
-                  <p className="text-sm font-medium text-gray-700 mb-2">
-                    プレビュー（{csvData.length}件）
+                <div className="mt-4 space-y-4">
+                  <p className="text-sm font-medium text-gray-700">
+                    {csvData.length}件のデータ — 列の割り当てを確認してください
                   </p>
-                  <div className="max-h-64 overflow-auto border border-gray-200 rounded-lg">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="bg-gray-50 border-b">
-                          {Object.keys(csvData[0]).map((key) => (
-                            <th
-                              key={key}
-                              className="text-left py-2 px-3 font-medium text-gray-500"
-                            >
-                              {key}
-                            </th>
+                  <div className="grid grid-cols-2 gap-2">
+                    {[
+                      { key: 'company_name', label: '会社名', required: true },
+                      { key: 'phone', label: '電話番号', required: true },
+                      { key: 'contact_name', label: '担当者名', required: false },
+                      { key: 'email', label: 'メールアドレス', required: false },
+                      { key: 'homepage', label: 'HP', required: false },
+                      { key: 'lead_source', label: '流入経路', required: false },
+                      { key: 'inquiry_date', label: '問い合わせ日', required: false },
+                      { key: 'inquiry_content', label: '問い合わせ内容', required: false },
+                      { key: 'memo', label: 'メモ', required: false },
+                    ].map(({ key, label, required }) => (
+                      <div key={key} className="flex items-center gap-2">
+                        <label className={`text-xs w-24 shrink-0 ${required ? 'font-bold text-gray-800' : 'text-gray-500'}`}>
+                          {label}{required ? ' *' : ''}
+                        </label>
+                        <select
+                          value={csvColumnMapping[key] || ''}
+                          onChange={(e) => setCsvColumnMapping(prev => ({ ...prev, [key]: e.target.value }))}
+                          className={`flex-1 text-xs border rounded px-2 py-1 ${required && !csvColumnMapping[key] ? 'border-red-300 bg-red-50' : 'border-gray-200'}`}
+                        >
+                          <option value="">（未設定）</option>
+                          {Object.keys(csvData[0]).map((col) => (
+                            <option key={col} value={col}>{col}</option>
                           ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {csvData.slice(0, 5).map((row, i) => (
-                          <tr
-                            key={i}
-                            className="border-b border-gray-100"
-                          >
-                            {Object.values(row).map((val, j) => (
-                              <td
-                                key={j}
-                                className="py-2 px-3 text-gray-600"
-                              >
-                                {val}
-                              </td>
-                            ))}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                    {csvData.length > 5 && (
-                      <p className="text-xs text-gray-400 text-center py-2">
-                        ...他 {csvData.length - 5}件
-                      </p>
-                    )}
+                        </select>
+                      </div>
+                    ))}
                   </div>
+                  {csvColumnMapping.company_name && csvColumnMapping.phone && (
+                    <div className="max-h-40 overflow-auto border border-gray-200 rounded-lg">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="bg-gray-50 border-b">
+                            <th className="text-left py-1 px-2 font-medium text-gray-500">会社名</th>
+                            <th className="text-left py-1 px-2 font-medium text-gray-500">電話番号</th>
+                            <th className="text-left py-1 px-2 font-medium text-gray-500">担当者</th>
+                            <th className="text-left py-1 px-2 font-medium text-gray-500">メール</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {csvData.slice(0, 5).map((row, i) => (
+                            <tr key={i} className="border-b border-gray-100">
+                              <td className="py-1 px-2 text-gray-600">{row[csvColumnMapping.company_name]}</td>
+                              <td className="py-1 px-2 text-gray-600">{row[csvColumnMapping.phone]}</td>
+                              <td className="py-1 px-2 text-gray-600">{csvColumnMapping.contact_name ? row[csvColumnMapping.contact_name] : ''}</td>
+                              <td className="py-1 px-2 text-gray-600">{csvColumnMapping.email ? row[csvColumnMapping.email] : ''}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      {csvData.length > 5 && (
+                        <p className="text-xs text-gray-400 text-center py-1">
+                          ...他 {csvData.length - 5}件
+                        </p>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -3107,7 +3145,7 @@ function LeadsPage() {
               </button>
               <button
                 onClick={handleImport}
-                disabled={csvData.length === 0 || importing}
+                disabled={csvData.length === 0 || importing || !csvColumnMapping.company_name || !csvColumnMapping.phone}
                 className="px-4 py-2 bg-slate-800 text-white text-sm font-medium rounded-lg hover:bg-slate-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {importing ? 'インポート中...' : `${csvData.length}件をインポート`}
