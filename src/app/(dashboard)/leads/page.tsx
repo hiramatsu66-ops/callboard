@@ -1124,12 +1124,19 @@ function LeadsPage() {
     if (csvData.length === 0) return;
     setImporting(true);
 
-    const leadsToInsert = csvData.map((row) => ({
-      company_name: row['会社名'] || row['company_name'] || '',
-      phone: row['電話番号'] || row['phone'] || '',
-      contact_name: row['担当者名'] || row['contact_name'] || '',
-      email: row['メールアドレス'] || row['email'] || '',
-      homepage: row['HP'] || row['homepage'] || row['URL'] || '',
+    const leadsToInsert = csvData.map((row) => {
+      // Trim keys to handle BOM or whitespace in CSV headers
+      const r: Record<string, string> = {};
+      for (const [k, v] of Object.entries(row)) {
+        r[k.trim().replace(/^\uFEFF/, '')] = (v || '').trim();
+      }
+      return r;
+    }).map((r) => ({
+      company_name: r['会社名'] || r['company_name'] || '',
+      phone: r['電話番号'] || r['phone'] || '',
+      contact_name: r['担当者名'] || r['contact_name'] || '',
+      email: r['メールアドレス'] || r['email'] || '',
+      homepage: r['HP'] || r['homepage'] || r['URL'] || '',
       lead_source: (() => {
         const raw = row['流入経路'] || row['lead_source'] || '';
         if (Object.keys(LEAD_SOURCE_LABELS).includes(raw)) return raw;
@@ -1158,8 +1165,13 @@ function LeadsPage() {
     );
 
     if (validLeads.length === 0) {
+      const sampleRow = csvData[0] ? Object.keys(csvData[0]).join(', ') : '(なし)';
+      alert(`会社名と電話番号の両方が入った行が見つかりませんでした。\n\nCSVの列名: ${sampleRow}\n\n「会社名」「電話番号」の列が必要です。`);
       setImporting(false);
       return;
+    }
+    if (validLeads.length < csvData.length) {
+      console.log(`CSV ${csvData.length}件中 ${csvData.length - validLeads.length}件は会社名または電話番号が空のためスキップ`);
     }
 
     // Check duplicates by company_name
@@ -1208,8 +1220,16 @@ function LeadsPage() {
       }
     }
 
-    await supabase.from('leads').insert(newLeads);
+    const { error, count } = await supabase.from('leads').insert(newLeads).select('id', { count: 'exact', head: true });
 
+    if (error) {
+      console.error('Import error:', error);
+      alert(`インポートに失敗しました: ${error.message}`);
+      setImporting(false);
+      return;
+    }
+
+    alert(`${newLeads.length}件のリードをインポートしました。`);
     setShowImportModal(false);
     setCsvData([]);
     setImporting(false);
