@@ -9,6 +9,7 @@ import type { Profile } from '@/lib/types';
 function InviteModal({ onClose }: { onClose: () => void }) {
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
+  const [role, setRole] = useState<'caller' | 'manager'>('caller');
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState('');
@@ -21,7 +22,7 @@ function InviteModal({ onClose }: { onClose: () => void }) {
     const res = await fetch('/api/invite', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, name }),
+      body: JSON.stringify({ email, name, role }),
     });
     const data = await res.json();
 
@@ -73,6 +74,25 @@ function InviteModal({ onClose }: { onClose: () => void }) {
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-500"
                 placeholder="user@example.com"
               />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">権限</label>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setRole('caller')}
+                  className={`flex-1 py-2 text-sm rounded-lg border transition-colors ${role === 'caller' ? 'bg-slate-800 text-white border-slate-800' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}
+                >
+                  架電担当
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRole('manager')}
+                  className={`flex-1 py-2 text-sm rounded-lg border transition-colors ${role === 'manager' ? 'bg-slate-800 text-white border-slate-800' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}
+                >
+                  マネージャー
+                </button>
+              </div>
             </div>
             <div className="flex gap-2 pt-1">
               <button type="button" onClick={onClose} className="flex-1 py-2 border border-gray-300 text-sm rounded-lg hover:bg-gray-50">
