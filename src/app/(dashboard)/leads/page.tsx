@@ -73,6 +73,9 @@ function LeadsPage() {
   const [todayCount, setTodayCount] = useState(0);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [callCounts, setCallCounts] = useState<Record<string, number>>({});
+  const [paceMeterOpen, setPaceMeterOpen] = useState(true);
+  const [todayCallsDone, setTodayCallsDone] = useState(0);
+  const [dailyTarget, setDailyTarget] = useState<number | null>(null);
   const [viewMode, setViewMode] = useState<'all' | 'today'>(() => searchParams.get('view') === 'today' ? 'today' : 'all');
   const [page, setPage] = useState(() => Number(searchParams.get('page') || '0'));
   const [search, setSearch] = useState(() => searchParams.get('q') || '');
@@ -253,11 +256,45 @@ function LeadsPage() {
     window.history.replaceState(null, '', newUrl);
   }, [viewMode, debouncedSearch, columnFilters, excludeDeal, excludeHasNextActivity, sortColumn, sortAscending, page]);
 
+  // Load pace meter data (today's calls + daily target)
+  const loadPaceMeter = useCallback(async (userId: string) => {
+    const today = new Date().toISOString().split('T')[0];
+    const todayStart = `${today}T00:00:00`;
+    const todayEnd = `${today}T23:59:59`;
+
+    const { count: callsDone } = await supabase
+      .from('call_logs')
+      .select('*', { count: 'exact', head: true })
+      .eq('caller_id', userId)
+      .eq('activity_type', 'call')
+      .gte('called_at', todayStart)
+      .lte('called_at', todayEnd);
+
+    setTodayCallsDone(callsDone || 0);
+
+    // Fetch daily target for today
+    const { data: targetData } = await supabase
+      .from('targets')
+      .select('target_calls, period_start, period_type')
+      .eq('user_id', userId)
+      .eq('period_type', 'daily')
+      .lte('period_start', today)
+      .order('period_start', { ascending: false })
+      .limit(1);
+
+    if (targetData && targetData.length > 0) {
+      setDailyTarget(targetData[0].target_calls);
+    } else {
+      setDailyTarget(null);
+    }
+  }, []);
+
   // Load Gmail connection status and current user
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
       if (!user) return;
       setCurrentUserId(user.id);
+      loadPaceMeter(user.id);
       fetch(`/api/gmail/status?user_id=${user.id}`)
         .then((res) => res.json())
         .then((data) => {
@@ -266,7 +303,8 @@ function LeadsPage() {
         })
         .catch(() => {});
     });
-  }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadPaceMeter]);
 
   // Apply column filters + common filters to any supabase query
   const applyFilters = useCallback(<T extends { or: Function; eq: Function; is: Function; in: Function }>(query: T): T => {
@@ -586,6 +624,9 @@ function LeadsPage() {
       setLeads(prev => prev.map(l => l.id === updatedLead.id ? updatedLead : l));
     }
     loadSidebarData(updatedLead || selectedLead);
+
+    // Refresh pace meter
+    if (currentUserId) loadPaceMeter(currentUserId);
 
     // HubSpot deal auto-create on appointment
     if (result === 'appointment' && hsCreateDealOnAppoint) {
@@ -2065,6 +2106,57 @@ function LeadsPage() {
             </button>
           </div>
         </div>
+
+        {/* Pace Meter */}
+        {(dailyTarget !== null || todayCallsDone > 0) && (
+          <div className="bg-white rounded-lg border border-gray-200 shadow-sm">
+            <button
+              onClick={() => setPaceMeterOpen(!paceMeterOpen)}
+              className="w-full flex items-center justify-between px-4 py-2.5 text-sm"
+            >
+              <span className="font-medium text-gray-700">
+                今日のペース
+                {dailyTarget !== null ? (
+                  todayCallsDone >= dailyTarget
+                    ? <span className="ml-2 text-green-600 font-semibold">目標達成！</span>
+                    : <span className="ml-2 text-gray-500 font-normal">目標まであと{dailyTarget - todayCallsDone}件</span>
+                ) : null}
+              </span>
+              <div className="flex items-center gap-3">
+                <span className="text-sm text-gray-600">
+                  {todayCallsDone}{dailyTarget !== null ? ` / ${dailyTarget}` : ''} 件
+                </span>
+                <svg className={`w-4 h-4 text-gray-400 transition-transform ${paceMeterOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </div>
+            </button>
+            {paceMeterOpen && (
+              <div className="px-4 pb-3">
+                {dailyTarget !== null ? (
+                  <>
+                    <div className="w-full bg-gray-100 rounded-full h-2">
+                      <div
+                        className={`h-2 rounded-full transition-all duration-500 ${
+                          todayCallsDone >= dailyTarget ? 'bg-green-500' : 'bg-blue-500'
+                        }`}
+                        style={{ width: `${Math.min(100, (todayCallsDone / dailyTarget) * 100)}%` }}
+                      />
+                    </div>
+                    <p className="text-xs text-gray-400 mt-1 text-right">
+                      {Math.round((todayCallsDone / dailyTarget) * 100)}%
+                    </p>
+                  </>
+                ) : (
+                  <p className="text-xs text-gray-400">
+                    日次目標が設定されていません。
+                    <a href="/targets" className="text-blue-600 hover:underline ml-1">目標を設定する →</a>
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Today / All tab switcher */}
         <div className="flex items-center gap-1 border-b border-gray-200">
