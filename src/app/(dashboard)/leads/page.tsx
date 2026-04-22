@@ -2590,7 +2590,7 @@ function LeadsPage() {
                 </svg>
               </button>
             </div>
-            <div className="px-6 py-4 space-y-4">
+            <div className="px-6 py-4 space-y-4 overflow-y-auto max-h-[70vh]">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
                   会社名 <span className="text-red-500">*</span>
