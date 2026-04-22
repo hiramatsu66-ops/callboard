@@ -25,6 +25,21 @@ export default function TargetsPage() {
   const [actualConnects, setActualConnects] = useState(0);
   const [actualAppointments, setActualAppointments] = useState(0);
 
+  // Manager: per-member editing state
+  interface MemberProgress {
+    userId: string;
+    name: string;
+    targetCalls: number;
+    targetConnects: number;
+    targetAppointments: number;
+    actualCalls: number;
+    actualConnects: number;
+    actualAppointments: number;
+    targetId: string | null;
+  }
+  const [memberProgress, setMemberProgress] = useState<MemberProgress[]>([]);
+  const [managerSaving, setManagerSaving] = useState<string | null>(null);
+
   // 3-section form state
   const [dailyForm, setDailyForm] = useState<PeriodForm>({
     periodStart: format(new Date(), 'yyyy-MM-dd'),
@@ -135,6 +150,37 @@ export default function TargetsPage() {
       setActualCalls(logs.length);
       setActualConnects(logs.filter((l) => l.result === 'connected' || l.result === 'appointment').length);
       setActualAppointments(logs.filter((l) => l.result === 'appointment').length);
+
+      // Manager: load all members' progress for current month
+      if (profile && profile.role === 'manager') {
+        const allProfiles = profilesData || [];
+        const callerProfiles = allProfiles.filter((p) => p.role !== 'manager');
+
+        const { data: allLogs } = await supabase
+          .from('call_logs')
+          .select('caller_id, result')
+          .gte('called_at', monthStartStr)
+          .lte('called_at', monthEnd + 'T23:59:59');
+
+        const memberStats: MemberProgress[] = callerProfiles.map((p) => {
+          const memberLogs = (allLogs || []).filter((l) => l.caller_id === p.id);
+          const existingTarget = (targetsData || []).find(
+            (t) => t.user_id === p.id && t.period_type === 'monthly' && t.period_start === monthStartStr
+          );
+          return {
+            userId: p.id,
+            name: p.name,
+            targetCalls: existingTarget?.target_calls ?? 0,
+            targetConnects: existingTarget?.target_connects ?? 0,
+            targetAppointments: existingTarget?.target_appointments ?? 0,
+            actualCalls: memberLogs.length,
+            actualConnects: memberLogs.filter((l) => l.result === 'connected' || l.result === 'appointment').length,
+            actualAppointments: memberLogs.filter((l) => l.result === 'appointment').length,
+            targetId: existingTarget?.id ?? null,
+          };
+        });
+        setMemberProgress(memberStats);
+      }
     } catch (err) {
       console.error('Load targets error:', err);
     } finally {
@@ -175,6 +221,39 @@ export default function TargetsPage() {
         target_appointments: form.appointments,
       });
     }
+  };
+
+  const handleSaveMemberTarget = async (member: MemberProgress) => {
+    setManagerSaving(member.userId);
+    const { data: existing } = await supabase
+      .from('targets')
+      .select('id')
+      .eq('user_id', member.userId)
+      .eq('period_type', 'monthly')
+      .eq('period_start', format(startOfMonth(new Date()), 'yyyy-MM-dd'))
+      .single();
+
+    if (existing) {
+      await supabase
+        .from('targets')
+        .update({
+          target_calls: member.targetCalls,
+          target_connects: member.targetConnects,
+          target_appointments: member.targetAppointments,
+        })
+        .eq('id', existing.id);
+    } else {
+      await supabase.from('targets').insert({
+        user_id: member.userId,
+        period_type: 'monthly',
+        period_start: format(startOfMonth(new Date()), 'yyyy-MM-dd'),
+        target_calls: member.targetCalls,
+        target_connects: member.targetConnects,
+        target_appointments: member.targetAppointments,
+      });
+    }
+    setManagerSaving(null);
+    loadData();
   };
 
   const handleSaveAll = async () => {
@@ -300,68 +379,136 @@ export default function TargetsPage() {
         </div>
       </div>
 
-      {/* Team Targets View */}
+      {/* Manager: Team Member Targets & Progress */}
       {currentUserRole === 'manager' && (
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-          <h2 className="text-lg font-semibold text-gray-800 mb-4">
-            チーム目標一覧
+          <h2 className="text-lg font-semibold text-gray-800 mb-2">
+            チームメンバー目標設定・進捗確認
           </h2>
-          {targets.length === 0 ? (
+          <p className="text-xs text-gray-500 mb-5">
+            {format(startOfMonth(new Date()), 'yyyy/MM')} 月次目標
+          </p>
+          {memberProgress.length === 0 ? (
             <p className="text-sm text-gray-400 text-center py-8">
-              目標が設定されていません
+              メンバーが見つかりません
             </p>
           ) : (
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-gray-200">
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-500">
-                    担当者
-                  </th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-500">
-                    期間
-                  </th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-500">
-                    開始日
-                  </th>
-                  <th className="text-right py-3 px-4 text-sm font-medium text-gray-500">
-                    架電数
-                  </th>
-                  <th className="text-right py-3 px-4 text-sm font-medium text-gray-500">
-                    接続数
-                  </th>
-                  <th className="text-right py-3 px-4 text-sm font-medium text-gray-500">
-                    アポ数
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {targets.map((target) => (
-                  <tr
-                    key={target.id}
-                    className="border-b border-gray-100 hover:bg-gray-50 transition-colors"
-                  >
-                    <td className="py-3 px-4 text-sm font-medium text-gray-800">
-                      {profiles.find(p => p.id === target.user_id)?.name || '不明'}
-                    </td>
-                    <td className="py-3 px-4 text-sm text-gray-600">
-                      {periodLabel(target.period_type)}
-                    </td>
-                    <td className="py-3 px-4 text-sm text-gray-600">
-                      {target.period_start}
-                    </td>
-                    <td className="py-3 px-4 text-sm text-right text-gray-700">
-                      {target.target_calls}
-                    </td>
-                    <td className="py-3 px-4 text-sm text-right text-gray-700">
-                      {target.target_connects}
-                    </td>
-                    <td className="py-3 px-4 text-sm text-right text-gray-700">
-                      {target.target_appointments}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="space-y-4">
+              {memberProgress.map((member) => {
+                const callPct = member.targetCalls > 0
+                  ? Math.min(100, Math.round((member.actualCalls / member.targetCalls) * 100))
+                  : null;
+                const apptPct = member.targetAppointments > 0
+                  ? Math.min(100, Math.round((member.actualAppointments / member.targetAppointments) * 100))
+                  : null;
+                const barColor = (pct: number | null) =>
+                  pct === null ? 'bg-gray-300' : pct >= 80 ? 'bg-green-500' : pct >= 50 ? 'bg-amber-400' : 'bg-red-400';
+
+                return (
+                  <div key={member.userId} className="border border-gray-200 rounded-lg p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="font-medium text-gray-800">{member.name}</span>
+                      <button
+                        onClick={() => handleSaveMemberTarget(member)}
+                        disabled={managerSaving === member.userId}
+                        className="px-3 py-1 bg-slate-700 text-white text-xs rounded hover:bg-slate-600 transition-colors disabled:opacity-50"
+                      >
+                        {managerSaving === member.userId ? '保存中...' : '保存'}
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-3 gap-3 mb-3">
+                      <div>
+                        <label className="block text-xs text-gray-500 mb-1">目標架電数</label>
+                        <input
+                          type="number"
+                          value={member.targetCalls}
+                          onChange={(e) =>
+                            setMemberProgress((prev) =>
+                              prev.map((m) =>
+                                m.userId === member.userId
+                                  ? { ...m, targetCalls: Number(e.target.value) }
+                                  : m
+                              )
+                            )
+                          }
+                          min={0}
+                          className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-slate-400"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-500 mb-1">目標接続数</label>
+                        <input
+                          type="number"
+                          value={member.targetConnects}
+                          onChange={(e) =>
+                            setMemberProgress((prev) =>
+                              prev.map((m) =>
+                                m.userId === member.userId
+                                  ? { ...m, targetConnects: Number(e.target.value) }
+                                  : m
+                              )
+                            )
+                          }
+                          min={0}
+                          className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-slate-400"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-500 mb-1">目標アポ数</label>
+                        <input
+                          type="number"
+                          value={member.targetAppointments}
+                          onChange={(e) =>
+                            setMemberProgress((prev) =>
+                              prev.map((m) =>
+                                m.userId === member.userId
+                                  ? { ...m, targetAppointments: Number(e.target.value) }
+                                  : m
+                              )
+                            )
+                          }
+                          min={0}
+                          className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-slate-400"
+                        />
+                      </div>
+                    </div>
+                    {/* Progress bars */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="bg-gray-50 rounded p-2">
+                        <div className="flex justify-between text-xs text-gray-500 mb-1">
+                          <span>架電 実績</span>
+                          <span className="font-medium text-gray-700">
+                            {member.actualCalls}{member.targetCalls > 0 ? ` / ${member.targetCalls}` : ''}
+                            {callPct !== null && ` (${callPct}%)`}
+                          </span>
+                        </div>
+                        <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                          <div
+                            className={`h-full ${barColor(callPct)} rounded-full`}
+                            style={{ width: `${callPct ?? 0}%` }}
+                          />
+                        </div>
+                      </div>
+                      <div className="bg-gray-50 rounded p-2">
+                        <div className="flex justify-between text-xs text-gray-500 mb-1">
+                          <span>アポ 実績</span>
+                          <span className="font-medium text-gray-700">
+                            {member.actualAppointments}{member.targetAppointments > 0 ? ` / ${member.targetAppointments}` : ''}
+                            {apptPct !== null && ` (${apptPct}%)`}
+                          </span>
+                        </div>
+                        <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                          <div
+                            className={`h-full ${barColor(apptPct)} rounded-full`}
+                            style={{ width: `${apptPct ?? 0}%` }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           )}
         </div>
       )}
