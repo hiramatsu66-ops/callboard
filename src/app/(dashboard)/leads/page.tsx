@@ -151,6 +151,9 @@ function LeadsPage() {
   // Auto re-surface: preview next activity date when no_answer selected
   const [autoNextDatePreview, setAutoNextDatePreview] = useState<string | null>(null);
 
+  // HubSpot deal auto-create on appointment
+  const [hsCreateDealOnAppoint, setHsCreateDealOnAppoint] = useState(true);
+
   // Toast notifications
   const [toasts, setToasts] = useState<{ id: number; message: string; type: 'success' | 'error' | 'info' }[]>([]);
   const toastIdRef = useRef(0);
@@ -583,6 +586,29 @@ function LeadsPage() {
       setLeads(prev => prev.map(l => l.id === updatedLead.id ? updatedLead : l));
     }
     loadSidebarData(updatedLead || selectedLead);
+
+    // HubSpot deal auto-create on appointment
+    if (result === 'appointment' && hsCreateDealOnAppoint) {
+      try {
+        const res = await fetch('/api/hubspot-create-deal', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            company_name: selectedLead.company_name,
+            email: selectedLead.email,
+            contact_name: selectedLead.contact_name,
+            homepage: selectedLead.homepage,
+          }),
+        });
+        if (res.ok) {
+          showToast('HubSpotに商談を作成しました', 'success');
+        } else {
+          showToast('HubSpot商談の作成に失敗しました（手動で登録してください）', 'error');
+        }
+      } catch {
+        showToast('HubSpot商談の作成に失敗しました（手動で登録してください）', 'error');
+      }
+    }
   };
 
   const handleBulkClassifyPriority = async () => {
@@ -2604,6 +2630,18 @@ function LeadsPage() {
                     />
                   </div>
                 )}
+                <div className="mt-2 flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="hs-create-deal"
+                    checked={hsCreateDealOnAppoint}
+                    onChange={(e) => setHsCreateDealOnAppoint(e.target.checked)}
+                    className="rounded border-gray-300"
+                  />
+                  <label htmlFor="hs-create-deal" className="text-[10px] text-gray-500 cursor-pointer">
+                    HubSpotに商談を自動作成します（アポ獲得時）
+                  </label>
+                </div>
                 <p className="text-[10px] text-gray-400 mb-1 mt-2">メール</p>
                 <button
                   onClick={() => handleRecordActivity('email_sent')}
