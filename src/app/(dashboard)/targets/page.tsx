@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { createClient } from '@/lib/supabase';
 import type { Target, Profile, PeriodType } from '@/lib/types';
-import { startOfMonth, format } from 'date-fns';
+import { startOfMonth, startOfWeek, format } from 'date-fns';
 
 export default function TargetsPage() {
   const [targets, setTargets] = useState<Target[]>([]);
@@ -144,6 +144,36 @@ export default function TargetsPage() {
         <h2 className="text-lg font-semibold text-gray-800 mb-4">
           自分の目標を設定
         </h2>
+        {/* Period preset buttons */}
+        <div className="flex gap-2 mb-4">
+          <button
+            onClick={() => {
+              setPeriodType('daily');
+              setPeriodStart(format(new Date(), 'yyyy-MM-dd'));
+            }}
+            className="px-3 py-1.5 text-sm font-medium rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-100 transition-colors"
+          >
+            今日
+          </button>
+          <button
+            onClick={() => {
+              setPeriodType('weekly');
+              setPeriodStart(format(startOfWeek(new Date(), { weekStartsOn: 1 }), 'yyyy-MM-dd'));
+            }}
+            className="px-3 py-1.5 text-sm font-medium rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-100 transition-colors"
+          >
+            今週
+          </button>
+          <button
+            onClick={() => {
+              setPeriodType('monthly');
+              setPeriodStart(format(startOfMonth(new Date()), 'yyyy-MM-dd'));
+            }}
+            className="px-3 py-1.5 text-sm font-medium rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-100 transition-colors"
+          >
+            今月
+          </button>
+        </div>
         <div className="grid grid-cols-2 gap-4 mb-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
