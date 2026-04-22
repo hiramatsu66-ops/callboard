@@ -151,6 +151,18 @@ function LeadsPage() {
   // Auto re-surface: preview next activity date when no_answer selected
   const [autoNextDatePreview, setAutoNextDatePreview] = useState<string | null>(null);
 
+  // Toast notifications
+  const [toasts, setToasts] = useState<{ id: number; message: string; type: 'success' | 'error' | 'info' }[]>([]);
+  const toastIdRef = useRef(0);
+  const showToast = useCallback((message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    const id = ++toastIdRef.current;
+    setToasts(prev => [...prev, { id, message, type }]);
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000);
+  }, []);
+
+  // No-answer auto-exclude threshold (default 5)
+  const NO_ANSWER_EXCLUDE_THRESHOLD = 5;
+
   // Inline edit state: { leadId-field: value }
   const [editingCell, setEditingCell] = useState<string | null>(null);
   const [editCellValue, setEditCellValue] = useState('');
@@ -511,16 +523,17 @@ function LeadsPage() {
 
     const isEmail = result === 'email_sent';
 
-    // For no_answer: compute auto next activity date
+    // For no_answer: compute auto next activity date and check threshold
     let effectiveNextDate = nextActivityDate || null;
+    let noAnswerCount = 0;
     if (result === 'no_answer') {
       const { count } = await supabase
         .from('call_logs')
         .select('*', { count: 'exact', head: true })
         .eq('lead_id', selectedLead.id)
         .eq('result', 'no_answer');
-      const nextCount = (count || 0) + 1;
-      const autoDate = computeNoAnswerNextDate(nextCount);
+      noAnswerCount = (count || 0) + 1;
+      const autoDate = computeNoAnswerNextDate(noAnswerCount);
       // Only use auto date if user hasn't manually set a date (or auto preview matches)
       if (!nextActivityDate || nextActivityDate === autoNextDatePreview) {
         effectiveNextDate = autoDate;
@@ -542,6 +555,12 @@ function LeadsPage() {
     else if (result === 'rejected') newStatus = 'dnc';
     else if (isEmail && newStatus === 'new') newStatus = 'calling';
     else if (newStatus === 'new') newStatus = 'calling';
+
+    // Auto-exclude if no_answer count reaches threshold
+    if (result === 'no_answer' && noAnswerCount >= NO_ANSWER_EXCLUDE_THRESHOLD) {
+      newStatus = 'excluded';
+      showToast(`${NO_ANSWER_EXCLUDE_THRESHOLD}回不通のため対象外に変更しました`, 'info');
+    }
 
     await supabase
       .from('leads')
@@ -3257,6 +3276,22 @@ function LeadsPage() {
           </div>
         </div>
       )}
+
+      {/* Toast notifications */}
+      <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2">
+        {toasts.map(t => (
+          <div
+            key={t.id}
+            className={`px-4 py-3 rounded-lg shadow-lg text-sm font-medium text-white transition-all ${
+              t.type === 'success' ? 'bg-green-600' :
+              t.type === 'error' ? 'bg-red-600' :
+              'bg-slate-700'
+            }`}
+          >
+            {t.message}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
