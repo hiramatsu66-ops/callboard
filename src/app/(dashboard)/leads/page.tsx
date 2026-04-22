@@ -1266,6 +1266,66 @@ function LeadsPage() {
     return mapping;
   };
 
+  // Normalization helpers for similarity detection
+  const normalizePhone = (phone: string): string =>
+    phone.replace(/[-\s()ー－]/g, '').replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0));
+
+  const normalizeCompany = (name: string): string => {
+    const toHalfWidth = (s: string) =>
+      s.replace(/[Ａ-Ｚａ-ｚ０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0));
+    return toHalfWidth(name)
+      .replace(/株式会社|有限会社|合同会社|（株）|\(株\)|（有）|\(有\)/g, '')
+      .replace(/[\s　]/g, '')
+      .toLowerCase();
+  };
+
+  const [csvSimilarDups, setCsvSimilarDups] = useState<Array<{ index: number; company: string; reason: string }>>([]);
+  const [csvSkipIndices, setCsvSkipIndices] = useState<Set<number>>(new Set());
+  const [checkingSimilar, setCheckingSimilar] = useState(false);
+
+  const handleCheckSimilarDups = useCallback(async () => {
+    if (!csvData.length || !csvColumnMapping.company_name) return;
+    setCheckingSimilar(true);
+    setCsvSimilarDups([]);
+    setCsvSkipIndices(new Set());
+
+    const { data: existingLeads } = await supabase
+      .from('leads')
+      .select('company_name, phone');
+
+    const normalizedExisting = (existingLeads || []).map(l => ({
+      normCompany: normalizeCompany(l.company_name || ''),
+      normPhone: normalizePhone(l.phone || ''),
+      original: l,
+    }));
+
+    const dups: Array<{ index: number; company: string; reason: string }> = [];
+    const m = csvColumnMapping;
+
+    csvData.forEach((row, i) => {
+      const company = (m.company_name ? row[m.company_name] : '')?.trim() || '';
+      const phone = (m.phone ? row[m.phone] : '')?.trim() || '';
+      if (!company) return;
+
+      const normCompany = normalizeCompany(company);
+      const normPhone = normalizePhone(phone);
+
+      for (const existing of normalizedExisting) {
+        if (normCompany && existing.normCompany && normCompany === existing.normCompany) {
+          dups.push({ index: i, company, reason: `会社名が類似（${existing.original.company_name}）` });
+          return;
+        }
+        if (normPhone && existing.normPhone && normPhone === existing.normPhone) {
+          dups.push({ index: i, company, reason: `電話番号が一致（${existing.original.company_name}）` });
+          return;
+        }
+      }
+    });
+
+    setCsvSimilarDups(dups);
+    setCheckingSimilar(false);
+  }, [csvData, csvColumnMapping]);
+
   const handleCSVUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -1312,7 +1372,7 @@ function LeadsPage() {
     };
 
     const m = csvColumnMapping;
-    const leadsToInsert = csvData.map((row) => ({
+    const leadsToInsert = csvData.filter((_, idx) => !csvSkipIndices.has(idx)).map((row) => ({
       company_name: (m.company_name ? row[m.company_name] : '')?.trim() || '',
       phone: (m.phone ? row[m.phone] : '')?.trim() || '',
       contact_name: (m.contact_name ? row[m.contact_name] : '')?.trim() || '',
@@ -3192,33 +3252,77 @@ function LeadsPage() {
                     ))}
                   </div>
                   {csvColumnMapping.company_name && csvColumnMapping.phone && (
-                    <div className="max-h-40 overflow-auto border border-gray-200 rounded-lg">
-                      <table className="w-full text-xs">
-                        <thead>
-                          <tr className="bg-gray-50 border-b">
-                            <th className="text-left py-1 px-2 font-medium text-gray-500">会社名</th>
-                            <th className="text-left py-1 px-2 font-medium text-gray-500">電話番号</th>
-                            <th className="text-left py-1 px-2 font-medium text-gray-500">担当者</th>
-                            <th className="text-left py-1 px-2 font-medium text-gray-500">メール</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {csvData.slice(0, 5).map((row, i) => (
-                            <tr key={i} className="border-b border-gray-100">
-                              <td className="py-1 px-2 text-gray-600">{row[csvColumnMapping.company_name]}</td>
-                              <td className="py-1 px-2 text-gray-600">{row[csvColumnMapping.phone]}</td>
-                              <td className="py-1 px-2 text-gray-600">{csvColumnMapping.contact_name ? row[csvColumnMapping.contact_name] : ''}</td>
-                              <td className="py-1 px-2 text-gray-600">{csvColumnMapping.email ? row[csvColumnMapping.email] : ''}</td>
+                    <>
+                      <div className="max-h-40 overflow-auto border border-gray-200 rounded-lg">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="bg-gray-50 border-b">
+                              <th className="text-left py-1 px-2 font-medium text-gray-500">会社名</th>
+                              <th className="text-left py-1 px-2 font-medium text-gray-500">電話番号</th>
+                              <th className="text-left py-1 px-2 font-medium text-gray-500">担当者</th>
+                              <th className="text-left py-1 px-2 font-medium text-gray-500">メール</th>
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                      {csvData.length > 5 && (
-                        <p className="text-xs text-gray-400 text-center py-1">
-                          ...他 {csvData.length - 5}件
-                        </p>
+                          </thead>
+                          <tbody>
+                            {csvData.slice(0, 5).map((row, i) => (
+                              <tr key={i} className="border-b border-gray-100">
+                                <td className="py-1 px-2 text-gray-600">{row[csvColumnMapping.company_name]}</td>
+                                <td className="py-1 px-2 text-gray-600">{row[csvColumnMapping.phone]}</td>
+                                <td className="py-1 px-2 text-gray-600">{csvColumnMapping.contact_name ? row[csvColumnMapping.contact_name] : ''}</td>
+                                <td className="py-1 px-2 text-gray-600">{csvColumnMapping.email ? row[csvColumnMapping.email] : ''}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        {csvData.length > 5 && (
+                          <p className="text-xs text-gray-400 text-center py-1">
+                            ...他 {csvData.length - 5}件
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Similar duplicate detection */}
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={handleCheckSimilarDups}
+                          disabled={checkingSimilar}
+                          className="text-xs px-3 py-1 border border-amber-300 text-amber-700 rounded hover:bg-amber-50 disabled:opacity-50"
+                        >
+                          {checkingSimilar ? '検索中...' : '⚠ 類似重複を検出'}
+                        </button>
+                        {csvSimilarDups.length === 0 && !checkingSimilar && (
+                          <span className="text-xs text-gray-400">類似重複のチェックを実行できます</span>
+                        )}
+                      </div>
+
+                      {csvSimilarDups.length > 0 && (
+                        <div className="border border-amber-200 bg-amber-50 rounded-lg p-3">
+                          <p className="text-xs font-medium text-amber-800 mb-2">⚠ 類似重複の可能性あり（{csvSimilarDups.length}件）</p>
+                          <div className="space-y-1 max-h-32 overflow-auto">
+                            {csvSimilarDups.map((dup) => (
+                              <div key={dup.index} className="flex items-center gap-2 text-xs">
+                                <input
+                                  type="checkbox"
+                                  checked={!csvSkipIndices.has(dup.index)}
+                                  onChange={(e) => {
+                                    setCsvSkipIndices(prev => {
+                                      const next = new Set(prev);
+                                      if (e.target.checked) next.delete(dup.index);
+                                      else next.add(dup.index);
+                                      return next;
+                                    });
+                                  }}
+                                  className="rounded border-amber-400"
+                                />
+                                <span className="text-amber-900 font-medium">{dup.company}</span>
+                                <span className="text-amber-700">{dup.reason}</span>
+                              </div>
+                            ))}
+                          </div>
+                          <p className="text-[10px] text-amber-600 mt-2">チェックを外すとスキップします</p>
+                        </div>
                       )}
-                    </div>
+                    </>
                   )}
                 </div>
               )}
