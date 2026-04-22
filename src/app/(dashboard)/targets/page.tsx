@@ -5,6 +5,13 @@ import { createClient } from '@/lib/supabase';
 import type { Target, Profile, PeriodType } from '@/lib/types';
 import { startOfMonth, startOfWeek, format } from 'date-fns';
 
+interface PeriodForm {
+  periodStart: string;
+  calls: number;
+  connects: number;
+  appointments: number;
+}
+
 export default function TargetsPage() {
   const [targets, setTargets] = useState<Target[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
@@ -13,14 +20,25 @@ export default function TargetsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  // Form state
-  const [periodType, setPeriodType] = useState<PeriodType>('monthly');
-  const [periodStart, setPeriodStart] = useState(
-    format(startOfMonth(new Date()), 'yyyy-MM-dd')
-  );
-  const [targetCalls, setTargetCalls] = useState(0);
-  const [targetConnects, setTargetConnects] = useState(0);
-  const [targetAppointments, setTargetAppointments] = useState(0);
+  // 3-section form state
+  const [dailyForm, setDailyForm] = useState<PeriodForm>({
+    periodStart: format(new Date(), 'yyyy-MM-dd'),
+    calls: 0,
+    connects: 0,
+    appointments: 0,
+  });
+  const [weeklyForm, setWeeklyForm] = useState<PeriodForm>({
+    periodStart: format(startOfWeek(new Date(), { weekStartsOn: 1 }), 'yyyy-MM-dd'),
+    calls: 0,
+    connects: 0,
+    appointments: 0,
+  });
+  const [monthlyForm, setMonthlyForm] = useState<PeriodForm>({
+    periodStart: format(startOfMonth(new Date()), 'yyyy-MM-dd'),
+    calls: 0,
+    connects: 0,
+    appointments: 0,
+  });
 
   const supabase = createClient();
 
@@ -56,17 +74,47 @@ export default function TargetsPage() {
 
       setTargets(targetsData || []);
 
-      // Pre-fill form with existing target if any
-      const existingTarget = (targetsData || []).find(
-        (t) =>
-          t.user_id === user.id &&
-          t.period_type === 'monthly' &&
-          t.period_start === format(startOfMonth(new Date()), 'yyyy-MM-dd')
+      // Pre-fill forms with existing targets
+      const userTargets = (targetsData || []).filter((t) => t.user_id === user.id);
+
+      const todayStr = format(new Date(), 'yyyy-MM-dd');
+      const weekStartStr = format(startOfWeek(new Date(), { weekStartsOn: 1 }), 'yyyy-MM-dd');
+      const monthStartStr = format(startOfMonth(new Date()), 'yyyy-MM-dd');
+
+      const existingDaily = userTargets.find(
+        (t) => t.period_type === 'daily' && t.period_start === todayStr
       );
-      if (existingTarget) {
-        setTargetCalls(existingTarget.target_calls);
-        setTargetConnects(existingTarget.target_connects);
-        setTargetAppointments(existingTarget.target_appointments);
+      if (existingDaily) {
+        setDailyForm({
+          periodStart: todayStr,
+          calls: existingDaily.target_calls,
+          connects: existingDaily.target_connects,
+          appointments: existingDaily.target_appointments,
+        });
+      }
+
+      const existingWeekly = userTargets.find(
+        (t) => t.period_type === 'weekly' && t.period_start === weekStartStr
+      );
+      if (existingWeekly) {
+        setWeeklyForm({
+          periodStart: weekStartStr,
+          calls: existingWeekly.target_calls,
+          connects: existingWeekly.target_connects,
+          appointments: existingWeekly.target_appointments,
+        });
+      }
+
+      const existingMonthly = userTargets.find(
+        (t) => t.period_type === 'monthly' && t.period_start === monthStartStr
+      );
+      if (existingMonthly) {
+        setMonthlyForm({
+          periodStart: monthStartStr,
+          calls: existingMonthly.target_calls,
+          connects: existingMonthly.target_connects,
+          appointments: existingMonthly.target_appointments,
+        });
       }
     } catch (err) {
       console.error('Load targets error:', err);
@@ -80,50 +128,52 @@ export default function TargetsPage() {
     loadData();
   }, [loadData]);
 
-  const handleSave = async () => {
-    setSaving(true);
-
-    // Check if target exists for this user/period
+  const upsertTarget = async (periodType: PeriodType, form: PeriodForm) => {
     const { data: existing } = await supabase
       .from('targets')
       .select('id')
       .eq('user_id', currentUserId)
       .eq('period_type', periodType)
-      .eq('period_start', periodStart)
+      .eq('period_start', form.periodStart)
       .single();
 
     if (existing) {
       await supabase
         .from('targets')
         .update({
-          target_calls: targetCalls,
-          target_connects: targetConnects,
-          target_appointments: targetAppointments,
+          target_calls: form.calls,
+          target_connects: form.connects,
+          target_appointments: form.appointments,
         })
         .eq('id', existing.id);
     } else {
       await supabase.from('targets').insert({
         user_id: currentUserId,
         period_type: periodType,
-        period_start: periodStart,
-        target_calls: targetCalls,
-        target_connects: targetConnects,
-        target_appointments: targetAppointments,
+        period_start: form.periodStart,
+        target_calls: form.calls,
+        target_connects: form.connects,
+        target_appointments: form.appointments,
       });
     }
+  };
 
+  const handleSaveAll = async () => {
+    setSaving(true);
+    await Promise.all([
+      upsertTarget('daily', dailyForm),
+      upsertTarget('weekly', weeklyForm),
+      upsertTarget('monthly', monthlyForm),
+    ]);
     setSaving(false);
     loadData();
   };
 
   const periodLabel = (type: PeriodType) => {
     switch (type) {
-      case 'daily':
-        return '日次';
-      case 'weekly':
-        return '週次';
-      case 'monthly':
-        return '月次';
+      case 'daily': return '日次';
+      case 'weekly': return '週次';
+      case 'monthly': return '月次';
     }
   };
 
@@ -135,119 +185,100 @@ export default function TargetsPage() {
     );
   }
 
+  const PeriodSection = ({
+    label,
+    color,
+    form,
+    onFormChange,
+  }: {
+    label: string;
+    color: string;
+    form: PeriodForm;
+    onFormChange: (f: PeriodForm) => void;
+  }) => (
+    <div className={`border-l-4 ${color} pl-4`}>
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-sm font-semibold text-gray-700">{label}</span>
+        <input
+          type="date"
+          value={form.periodStart}
+          onChange={(e) => onFormChange({ ...form, periodStart: e.target.value })}
+          className="px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-1 focus:ring-slate-400"
+        />
+      </div>
+      <div className="grid grid-cols-3 gap-3">
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">目標架電数</label>
+          <input
+            type="number"
+            value={form.calls}
+            onChange={(e) => onFormChange({ ...form, calls: Number(e.target.value) })}
+            min={0}
+            className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-slate-400"
+          />
+        </div>
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">目標接続数</label>
+          <input
+            type="number"
+            value={form.connects}
+            onChange={(e) => onFormChange({ ...form, connects: Number(e.target.value) })}
+            min={0}
+            className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-slate-400"
+          />
+        </div>
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">目標アポ数</label>
+          <input
+            type="number"
+            value={form.appointments}
+            onChange={(e) => onFormChange({ ...form, appointments: Number(e.target.value) })}
+            min={0}
+            className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-slate-400"
+          />
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold text-gray-800">目標設定</h1>
 
-      {/* Target Setting Form */}
+      {/* Target Setting Form - 3 sections */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-        <h2 className="text-lg font-semibold text-gray-800 mb-4">
+        <h2 className="text-lg font-semibold text-gray-800 mb-5">
           自分の目標を設定
         </h2>
-        {/* Period preset buttons */}
-        <div className="flex gap-2 mb-4">
+        <div className="space-y-6">
+          <PeriodSection
+            label="日次"
+            color="border-blue-400"
+            form={dailyForm}
+            onFormChange={setDailyForm}
+          />
+          <PeriodSection
+            label="週次"
+            color="border-amber-400"
+            form={weeklyForm}
+            onFormChange={setWeeklyForm}
+          />
+          <PeriodSection
+            label="月次"
+            color="border-green-400"
+            form={monthlyForm}
+            onFormChange={setMonthlyForm}
+          />
+        </div>
+        <div className="mt-6">
           <button
-            onClick={() => {
-              setPeriodType('daily');
-              setPeriodStart(format(new Date(), 'yyyy-MM-dd'));
-            }}
-            className="px-3 py-1.5 text-sm font-medium rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-100 transition-colors"
+            onClick={handleSaveAll}
+            disabled={saving}
+            className="px-6 py-2 bg-slate-800 text-white text-sm font-medium rounded-lg hover:bg-slate-700 transition-colors disabled:opacity-50"
           >
-            今日
-          </button>
-          <button
-            onClick={() => {
-              setPeriodType('weekly');
-              setPeriodStart(format(startOfWeek(new Date(), { weekStartsOn: 1 }), 'yyyy-MM-dd'));
-            }}
-            className="px-3 py-1.5 text-sm font-medium rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-100 transition-colors"
-          >
-            今週
-          </button>
-          <button
-            onClick={() => {
-              setPeriodType('monthly');
-              setPeriodStart(format(startOfMonth(new Date()), 'yyyy-MM-dd'));
-            }}
-            className="px-3 py-1.5 text-sm font-medium rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-100 transition-colors"
-          >
-            今月
+            {saving ? '保存中...' : '3種類まとめて保存'}
           </button>
         </div>
-        <div className="grid grid-cols-2 gap-4 mb-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              期間タイプ
-            </label>
-            <select
-              value={periodType}
-              onChange={(e) => setPeriodType(e.target.value as PeriodType)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-500 bg-white"
-            >
-              <option value="daily">日次</option>
-              <option value="weekly">週次</option>
-              <option value="monthly">月次</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              期間開始日
-            </label>
-            <input
-              type="date"
-              value={periodStart}
-              onChange={(e) => setPeriodStart(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-500"
-            />
-          </div>
-        </div>
-        <div className="grid grid-cols-3 gap-4 mb-6">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              目標架電数
-            </label>
-            <input
-              type="number"
-              value={targetCalls}
-              onChange={(e) => setTargetCalls(Number(e.target.value))}
-              min={0}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-500"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              目標接続数
-            </label>
-            <input
-              type="number"
-              value={targetConnects}
-              onChange={(e) => setTargetConnects(Number(e.target.value))}
-              min={0}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-500"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              目標アポ数
-            </label>
-            <input
-              type="number"
-              value={targetAppointments}
-              onChange={(e) =>
-                setTargetAppointments(Number(e.target.value))
-              }
-              min={0}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-500"
-            />
-          </div>
-        </div>
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          className="px-6 py-2 bg-slate-800 text-white text-sm font-medium rounded-lg hover:bg-slate-700 transition-colors disabled:opacity-50"
-        >
-          {saving ? '保存中...' : '保存'}
-        </button>
       </div>
 
       {/* Team Targets View */}
