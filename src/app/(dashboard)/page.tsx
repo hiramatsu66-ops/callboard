@@ -85,6 +85,8 @@ function DashboardPage() {
   const [targets, setTargets] = useState<Target[]>([]);
   const [currentUserId, setCurrentUserId] = useState<string>('');
   const [loading, setLoading] = useState(true);
+  const [memberSortCol, setMemberSortCol] = useState<'name' | 'calls' | 'connects' | 'appointments' | 'callAchieve' | 'apptAchieve'>('calls');
+  const [memberSortAsc, setMemberSortAsc] = useState(false);
 
   const supabase = createClient();
 
@@ -478,60 +480,76 @@ function DashboardPage() {
       {/* Member Comparison Table */}
       {viewMode === 'team' && memberStats.length > 0 && (
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-          <h2 className="text-lg font-semibold text-gray-800 mb-4">
-            担当者別実績
-          </h2>
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-gray-200">
-                <th className="text-left py-3 px-4 text-sm font-medium text-gray-500">
-                  担当者
-                </th>
-                <th className="text-right py-3 px-4 text-sm font-medium text-gray-500">
-                  架電数
-                </th>
-                <th className="text-right py-3 px-4 text-sm font-medium text-gray-500">
-                  接続数
-                </th>
-                <th className="text-right py-3 px-4 text-sm font-medium text-gray-500">
-                  アポ数
-                </th>
-                <th className="text-right py-3 px-4 text-sm font-medium text-gray-500">
-                  接続率
-                </th>
-                <th className="text-right py-3 px-4 text-sm font-medium text-gray-500">
-                  アポ率
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {memberStats.map((m) => (
-                <tr
-                  key={m.profile.id}
-                  className="border-b border-gray-100 hover:bg-gray-50 transition-colors"
-                >
-                  <td className="py-3 px-4 text-sm font-medium text-gray-800">
-                    {m.profile.name}
-                  </td>
-                  <td className="py-3 px-4 text-sm text-right text-gray-700">
-                    {m.calls}
-                  </td>
-                  <td className="py-3 px-4 text-sm text-right text-gray-700">
-                    {m.connects}
-                  </td>
-                  <td className="py-3 px-4 text-sm text-right text-gray-700">
-                    {m.appointments}
-                  </td>
-                  <td className="py-3 px-4 text-sm text-right text-gray-700">
-                    {m.connectRate.toFixed(1)}%
-                  </td>
-                  <td className="py-3 px-4 text-sm text-right text-gray-700">
-                    {m.appointmentRate.toFixed(1)}%
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <h2 className="text-lg font-semibold text-gray-800 mb-4">担当者別実績</h2>
+          {(() => {
+            const achieveColor = (pct: number) =>
+              pct >= 80 ? 'text-green-600' : pct >= 50 ? 'text-amber-500' : 'text-red-500';
+            const sortedStats = [...memberStats].sort((a, b) => {
+              const aTarget = targets.find(t => t.user_id === a.profile.id);
+              const bTarget = targets.find(t => t.user_id === b.profile.id);
+              const getVal = (m: MemberStats, t: Target | undefined) => {
+                switch (memberSortCol) {
+                  case 'name': return m.profile.name;
+                  case 'calls': return m.calls;
+                  case 'connects': return m.connects;
+                  case 'appointments': return m.appointments;
+                  case 'callAchieve': return t && t.target_calls > 0 ? (m.calls / t.target_calls) * 100 : -1;
+                  case 'apptAchieve': return t && t.target_appointments > 0 ? (m.appointments / t.target_appointments) * 100 : -1;
+                  default: return m.calls;
+                }
+              };
+              const av = getVal(a, aTarget), bv = getVal(b, bTarget);
+              if (typeof av === 'string' && typeof bv === 'string') return memberSortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
+              return memberSortAsc ? (av as number) - (bv as number) : (bv as number) - (av as number);
+            });
+            const SortTh = ({ col, label, right = true }: { col: typeof memberSortCol; label: string; right?: boolean }) => (
+              <th
+                className={`${right ? 'text-right' : 'text-left'} py-3 px-4 text-sm font-medium text-gray-500 cursor-pointer hover:text-gray-700 select-none`}
+                onClick={() => { if (memberSortCol === col) setMemberSortAsc(!memberSortAsc); else { setMemberSortCol(col); setMemberSortAsc(false); } }}
+              >
+                {label}{memberSortCol === col ? (memberSortAsc ? ' ▲' : ' ▼') : ''}
+              </th>
+            );
+            return (
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-gray-200">
+                    <SortTh col="name" label="担当者" right={false} />
+                    <SortTh col="calls" label="架電数" />
+                    <SortTh col="connects" label="接続数" />
+                    <SortTh col="appointments" label="アポ数" />
+                    <th className="text-right py-3 px-4 text-sm font-medium text-gray-500">接続率</th>
+                    <th className="text-right py-3 px-4 text-sm font-medium text-gray-500">アポ率</th>
+                    <SortTh col="callAchieve" label="架電達成率" />
+                    <SortTh col="apptAchieve" label="アポ達成率" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortedStats.map((m) => {
+                    const memberTarget = targets.find(t => t.user_id === m.profile.id);
+                    const callAchievePct = memberTarget && memberTarget.target_calls > 0 ? (m.calls / memberTarget.target_calls) * 100 : null;
+                    const apptAchievePct = memberTarget && memberTarget.target_appointments > 0 ? (m.appointments / memberTarget.target_appointments) * 100 : null;
+                    return (
+                      <tr key={m.profile.id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
+                        <td className="py-3 px-4 text-sm font-medium text-gray-800">{m.profile.name}</td>
+                        <td className="py-3 px-4 text-sm text-right text-gray-700">{m.calls}</td>
+                        <td className="py-3 px-4 text-sm text-right text-gray-700">{m.connects}</td>
+                        <td className="py-3 px-4 text-sm text-right text-gray-700">{m.appointments}</td>
+                        <td className="py-3 px-4 text-sm text-right text-gray-700">{m.connectRate.toFixed(1)}%</td>
+                        <td className="py-3 px-4 text-sm text-right text-gray-700">{m.appointmentRate.toFixed(1)}%</td>
+                        <td className={`py-3 px-4 text-sm text-right font-medium ${callAchievePct !== null ? achieveColor(callAchievePct) : 'text-gray-300'}`}>
+                          {callAchievePct !== null ? `${Math.round(callAchievePct)}%` : '-'}
+                        </td>
+                        <td className={`py-3 px-4 text-sm text-right font-medium ${apptAchievePct !== null ? achieveColor(apptAchievePct) : 'text-gray-300'}`}>
+                          {apptAchievePct !== null ? `${Math.round(apptAchievePct)}%` : '-'}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            );
+          })()}
         </div>
       )}
 
