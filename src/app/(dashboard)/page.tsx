@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, Suspense } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase';
 import type { Profile, CallLog, Target, PeriodType } from '@/lib/types';
 import {
@@ -24,9 +25,14 @@ import {
   subWeeks,
   subMonths,
   format,
+  differenceInDays,
+  eachDayOfInterval,
+  eachWeekOfInterval,
+  eachMonthOfInterval,
 } from 'date-fns';
 
 type ViewMode = 'personal' | 'team';
+type ExtendedPeriodType = PeriodType | 'custom';
 
 interface KPIData {
   totalCalls: number;
@@ -46,8 +52,25 @@ interface MemberStats {
   appointmentRate: number;
 }
 
-export default function DashboardPage() {
-  const [periodType, setPeriodType] = useState<PeriodType>('daily');
+export default function DashboardPageWrapper() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center h-64"><p className="text-gray-500">読み込み中...</p></div>}>
+      <DashboardPage />
+    </Suspense>
+  );
+}
+
+function DashboardPage() {
+  const searchParams = useSearchParams();
+  const [periodType, setPeriodType] = useState<ExtendedPeriodType>(() => {
+    const p = searchParams.get('period');
+    if (p === 'custom') return 'custom';
+    if (p === 'weekly') return 'weekly';
+    if (p === 'monthly') return 'monthly';
+    return 'daily';
+  });
+  const [customFrom, setCustomFrom] = useState(() => searchParams.get('from') || '');
+  const [customTo, setCustomTo] = useState(() => searchParams.get('to') || '');
   const [viewMode, setViewMode] = useState<ViewMode>('team');
   const [kpi, setKPI] = useState<KPIData>({
     totalCalls: 0,
@@ -66,7 +89,7 @@ export default function DashboardPage() {
   const supabase = createClient();
 
   const getDateRange = useCallback(
-    (type: PeriodType) => {
+    (type: ExtendedPeriodType) => {
       const now = new Date();
       switch (type) {
         case 'daily':
@@ -78,9 +101,14 @@ export default function DashboardPage() {
           };
         case 'monthly':
           return { start: startOfMonth(now), end: endOfMonth(now) };
+        case 'custom': {
+          const from = customFrom ? startOfDay(new Date(customFrom)) : startOfDay(subDays(now, 7));
+          const to = customTo ? endOfDay(new Date(customTo)) : endOfDay(now);
+          return { start: from, end: to };
+        }
       }
     },
-    []
+    [customFrom, customTo]
   );
 
   const loadData = useCallback(async () => {
@@ -171,58 +199,83 @@ export default function DashboardPage() {
 
     // Build trend data
     const trendPoints: Record<string, unknown>[] = [];
-    const pointCount = periodType === 'daily' ? 7 : periodType === 'weekly' ? 4 : 6;
 
-    for (let i = pointCount - 1; i >= 0; i--) {
-      let pStart: Date, pEnd: Date, label: string;
+    if (periodType === 'custom') {
+      const rangeStart = customFrom ? startOfDay(new Date(customFrom)) : startOfDay(subDays(new Date(), 7));
+      const rangeEnd = customTo ? endOfDay(new Date(customTo)) : endOfDay(new Date());
+      const daysDiff = differenceInDays(rangeEnd, rangeStart);
 
-      if (periodType === 'daily') {
-        const d = subDays(new Date(), i);
-        pStart = startOfDay(d);
-        pEnd = endOfDay(d);
-        label = format(d, 'M/d');
-      } else if (periodType === 'weekly') {
-        const d = subWeeks(new Date(), i);
-        pStart = startOfWeek(d, { weekStartsOn: 1 });
-        pEnd = endOfWeek(d, { weekStartsOn: 1 });
-        label = format(pStart, 'M/d') + '~';
+      // Determine granularity: <=7 days -> daily, 8-60 -> weekly, 61+ -> monthly
+      if (daysDiff <= 7) {
+        const days = eachDayOfInterval({ start: rangeStart, end: rangeEnd });
+        for (const d of days) {
+          let trendQuery = supabase.from('call_logs').select('result')
+            .gte('called_at', startOfDay(d).toISOString())
+            .lte('called_at', endOfDay(d).toISOString());
+          if (viewMode === 'personal') trendQuery = trendQuery.eq('caller_id', user.id);
+          const { data: tl } = await trendQuery;
+          const tlogs = tl || [];
+          trendPoints.push({ label: format(d, 'M/d'), calls: tlogs.length, connects: tlogs.filter(l => l.result === 'connected' || l.result === 'appointment').length, appointments: tlogs.filter(l => l.result === 'appointment').length });
+        }
+      } else if (daysDiff <= 60) {
+        const weeks = eachWeekOfInterval({ start: rangeStart, end: rangeEnd }, { weekStartsOn: 1 });
+        for (const w of weeks) {
+          const wEnd = endOfWeek(w, { weekStartsOn: 1 });
+          let trendQuery = supabase.from('call_logs').select('result')
+            .gte('called_at', startOfDay(w).toISOString())
+            .lte('called_at', wEnd.toISOString());
+          if (viewMode === 'personal') trendQuery = trendQuery.eq('caller_id', user.id);
+          const { data: tl } = await trendQuery;
+          const tlogs = tl || [];
+          trendPoints.push({ label: format(w, 'M/d') + '~', calls: tlogs.length, connects: tlogs.filter(l => l.result === 'connected' || l.result === 'appointment').length, appointments: tlogs.filter(l => l.result === 'appointment').length });
+        }
       } else {
-        const d = subMonths(new Date(), i);
-        pStart = startOfMonth(d);
-        pEnd = endOfMonth(d);
-        label = format(d, 'yyyy/M');
+        const months = eachMonthOfInterval({ start: rangeStart, end: rangeEnd });
+        for (const m of months) {
+          const mEnd = endOfMonth(m);
+          let trendQuery = supabase.from('call_logs').select('result')
+            .gte('called_at', startOfMonth(m).toISOString())
+            .lte('called_at', mEnd.toISOString());
+          if (viewMode === 'personal') trendQuery = trendQuery.eq('caller_id', user.id);
+          const { data: tl } = await trendQuery;
+          const tlogs = tl || [];
+          trendPoints.push({ label: format(m, 'yyyy/M'), calls: tlogs.length, connects: tlogs.filter(l => l.result === 'connected' || l.result === 'appointment').length, appointments: tlogs.filter(l => l.result === 'appointment').length });
+        }
       }
-
-      // Fetch trend logs
-      let trendQuery = supabase
-        .from('call_logs')
-        .select('result')
-        .gte('called_at', pStart.toISOString())
-        .lte('called_at', pEnd.toISOString());
-
-      if (viewMode === 'personal') {
-        trendQuery = trendQuery.eq('caller_id', user.id);
+    } else {
+      const pointCount = periodType === 'daily' ? 7 : periodType === 'weekly' ? 4 : 6;
+      for (let i = pointCount - 1; i >= 0; i--) {
+        let pStart: Date, pEnd: Date, label: string;
+        if (periodType === 'daily') {
+          const d = subDays(new Date(), i);
+          pStart = startOfDay(d); pEnd = endOfDay(d); label = format(d, 'M/d');
+        } else if (periodType === 'weekly') {
+          const d = subWeeks(new Date(), i);
+          pStart = startOfWeek(d, { weekStartsOn: 1 }); pEnd = endOfWeek(d, { weekStartsOn: 1 }); label = format(pStart, 'M/d') + '~';
+        } else {
+          const d = subMonths(new Date(), i);
+          pStart = startOfMonth(d); pEnd = endOfMonth(d); label = format(d, 'yyyy/M');
+        }
+        let trendQuery = supabase.from('call_logs').select('result')
+          .gte('called_at', pStart.toISOString()).lte('called_at', pEnd.toISOString());
+        if (viewMode === 'personal') trendQuery = trendQuery.eq('caller_id', user.id);
+        const { data: trendLogs } = await trendQuery;
+        const tl = trendLogs || [];
+        trendPoints.push({
+          label, calls: tl.length,
+          connects: tl.filter(l => l.result === 'connected' || l.result === 'appointment').length,
+          appointments: tl.filter(l => l.result === 'appointment').length,
+        });
       }
-
-      const { data: trendLogs } = await trendQuery;
-      const tl = trendLogs || [];
-
-      trendPoints.push({
-        label,
-        calls: tl.length,
-        connects: tl.filter(
-          (l) => l.result === 'connected' || l.result === 'appointment'
-        ).length,
-        appointments: tl.filter((l) => l.result === 'appointment').length,
-      });
     }
     setTrendData(trendPoints);
 
     // Fetch targets
+    const targetPeriodType = periodType === 'custom' ? 'daily' : periodType;
     const { data: targetData } = await supabase
       .from('targets')
       .select('*')
-      .eq('period_type', periodType === 'daily' ? 'daily' : periodType === 'weekly' ? 'weekly' : 'monthly');
+      .eq('period_type', targetPeriodType);
 
     setTargets(targetData || []);
     } catch (err) {
@@ -231,11 +284,23 @@ export default function DashboardPage() {
       setLoading(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [periodType, viewMode]);
+  }, [periodType, viewMode, customFrom, customTo]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // Sync period to URL
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (periodType !== 'daily') params.set('period', periodType);
+    if (periodType === 'custom') {
+      if (customFrom) params.set('from', customFrom);
+      if (customTo) params.set('to', customTo);
+    }
+    const qs = params.toString();
+    window.history.replaceState(null, '', qs ? `/?${qs}` : '/');
+  }, [periodType, customFrom, customTo]);
 
   if (loading) {
     return (
@@ -282,6 +347,7 @@ export default function DashboardPage() {
                 { key: 'daily', label: '日別' },
                 { key: 'weekly', label: '週別' },
                 { key: 'monthly', label: '月別' },
+                { key: 'custom', label: 'カスタム' },
               ] as const
             ).map((p) => (
               <button
@@ -297,6 +363,24 @@ export default function DashboardPage() {
               </button>
             ))}
           </div>
+          {/* Custom date pickers */}
+          {periodType === 'custom' && (
+            <div className="flex items-center gap-2 bg-white rounded-lg border border-gray-200 px-3 py-1">
+              <input
+                type="date"
+                value={customFrom}
+                onChange={(e) => setCustomFrom(e.target.value)}
+                className="text-sm border-0 focus:ring-0 focus:outline-none"
+              />
+              <span className="text-gray-400 text-sm">〜</span>
+              <input
+                type="date"
+                value={customTo}
+                onChange={(e) => setCustomTo(e.target.value)}
+                className="text-sm border-0 focus:ring-0 focus:outline-none"
+              />
+            </div>
+          )}
         </div>
       </div>
 
