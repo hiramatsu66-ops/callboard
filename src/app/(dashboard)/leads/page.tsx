@@ -1379,6 +1379,32 @@ function LeadsPage() {
       }
     }
 
+    // HubSpot check for leads about to be imported (batch: first check a few)
+    const hsWarnings: string[] = [];
+    for (const lead of newLeads.slice(0, 20)) { // limit to first 20 to avoid slow imports
+      try {
+        const hsRes = await fetch('/api/hubspot-check', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ company_name: lead.company_name, homepage: lead.homepage, email: lead.email }),
+        });
+        if (hsRes.ok) {
+          const hsData = await hsRes.json();
+          if (hsData.deal_exists) {
+            const owner = hsData.deal_owner ? `（担当: ${hsData.deal_owner}）` : '';
+            hsWarnings.push(`${lead.company_name}${owner}`);
+          }
+        }
+      } catch { /* ignore */ }
+    }
+    if (hsWarnings.length > 0) {
+      const warnMsg = `以下の会社はHubSpotに商談があります：\n${hsWarnings.slice(0, 5).join('\n')}${hsWarnings.length > 5 ? `\n他 ${hsWarnings.length - 5} 件` : ''}\n\nそれでもインポートしますか？`;
+      if (!window.confirm(warnMsg)) {
+        setImporting(false);
+        return;
+      }
+    }
+
     const { error } = await supabase.from('leads').insert(newLeads);
 
     if (error) {
@@ -1440,6 +1466,30 @@ function LeadsPage() {
         return;
       }
     }
+
+    // HubSpot duplicate check
+    try {
+      const hsRes = await fetch('/api/hubspot-check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          company_name: addForm.company_name,
+          homepage: addForm.homepage,
+          email: addForm.email,
+          contact_name: addForm.contact_name,
+        }),
+      });
+      if (hsRes.ok) {
+        const hsData = await hsRes.json();
+        if (hsData.deal_exists) {
+          const owner = hsData.deal_owner ? `（担当: ${hsData.deal_owner}）` : '';
+          if (!window.confirm(`HubSpotに商談があります${owner}。\nそれでも追加しますか？`)) {
+            setAdding(false);
+            return;
+          }
+        }
+      }
+    } catch { /* ignore HS check error */ }
 
     await supabase.from('leads').insert({
       company_name: addForm.company_name,
