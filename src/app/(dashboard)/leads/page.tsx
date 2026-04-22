@@ -69,6 +69,9 @@ function LeadsPage() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [totalCount, setTotalCount] = useState(0);
+  const [todayCount, setTodayCount] = useState(0);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<'all' | 'today'>(() => searchParams.get('view') === 'today' ? 'today' : 'all');
   const [page, setPage] = useState(() => Number(searchParams.get('page') || '0'));
   const [search, setSearch] = useState(() => searchParams.get('q') || '');
   const [debouncedSearch, setDebouncedSearch] = useState(() => searchParams.get('q') || '');
@@ -215,6 +218,7 @@ function LeadsPage() {
   // Sync filters to URL
   useEffect(() => {
     const params = new URLSearchParams();
+    if (viewMode === 'today') params.set('view', 'today');
     if (debouncedSearch) params.set('q', debouncedSearch);
     for (const [col, vals] of Object.entries(columnFilters)) {
       if (vals.size > 0) params.set(`cf_${col}`, Array.from(vals).join(','));
@@ -227,12 +231,13 @@ function LeadsPage() {
     const qs = params.toString();
     const newUrl = qs ? `/leads?${qs}` : '/leads';
     window.history.replaceState(null, '', newUrl);
-  }, [debouncedSearch, columnFilters, excludeDeal, excludeHasNextActivity, sortColumn, sortAscending, page]);
+  }, [viewMode, debouncedSearch, columnFilters, excludeDeal, excludeHasNextActivity, sortColumn, sortAscending, page]);
 
-  // Load Gmail connection status
+  // Load Gmail connection status and current user
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
       if (!user) return;
+      setCurrentUserId(user.id);
       fetch(`/api/gmail/status?user_id=${user.id}`)
         .then((res) => res.json())
         .then((data) => {
@@ -319,15 +324,42 @@ function LeadsPage() {
     return query;
   }, [debouncedSearch, columnFilters, excludeDeal, excludeHasNextActivity]);
 
+  // Apply today view filter to a query
+  const applyTodayFilter = useCallback(<T extends { or: Function; eq: Function; lte: Function; is: Function; in: Function }>(query: T, userId: string): T => {
+    const today = new Date().toISOString().split('T')[0];
+    // (next_activity_date <= today AND assigned_to = userId)
+    // OR (next_activity_date is null AND status in ('new','calling') AND assigned_to = userId)
+    query = query.eq('assigned_to', userId) as T;
+    query = query.or(
+      `next_activity_date.lte.${today},and(next_activity_date.is.null,status.in.(new,calling))`
+    ) as T;
+    return query;
+  }, []);
+
   const loadLeads = useCallback(async () => {
     try {
       setLoading(true);
+
+      // Load today's count for badge
+      if (currentUserId) {
+        const today = new Date().toISOString().split('T')[0];
+        const { count: tc } = await supabase
+          .from('leads')
+          .select('*', { count: 'exact', head: true })
+          .eq('assigned_to', currentUserId)
+          .or(`next_activity_date.lte.${today},and(next_activity_date.is.null,status.in.(new,calling))`);
+        setTodayCount(tc || 0);
+      }
 
       let query = supabase
         .from('leads')
         .select('*', { count: 'exact' });
 
       query = applyFilters(query);
+
+      if (viewMode === 'today' && currentUserId) {
+        query = applyTodayFilter(query, currentUserId) as typeof query;
+      }
 
       const { data, count } = await query
         .order(sortColumn, { ascending: sortAscending })
@@ -341,7 +373,7 @@ function LeadsPage() {
       setLoading(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, applyFilters, sortColumn, sortAscending]);
+  }, [page, applyFilters, sortColumn, sortAscending, viewMode, currentUserId, applyTodayFilter]);
 
   useEffect(() => {
     const loadProfiles = async () => {
@@ -1785,6 +1817,35 @@ function LeadsPage() {
               CSVインポート
             </button>
           </div>
+        </div>
+
+        {/* Today / All tab switcher */}
+        <div className="flex items-center gap-1 border-b border-gray-200">
+          <button
+            onClick={() => { setViewMode('all'); setPage(0); }}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              viewMode === 'all'
+                ? 'border-slate-800 text-slate-800'
+                : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            全件 ({totalCount})
+          </button>
+          <button
+            onClick={() => { setViewMode('today'); setPage(0); }}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              viewMode === 'today'
+                ? 'border-slate-800 text-slate-800'
+                : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            今日
+            {todayCount > 0 && (
+              <span className="ml-1.5 px-1.5 py-0.5 bg-amber-100 text-amber-800 text-xs rounded-full font-semibold">
+                {todayCount}
+              </span>
+            )}
+          </button>
         </div>
 
         {/* Bulk actions bar */}
