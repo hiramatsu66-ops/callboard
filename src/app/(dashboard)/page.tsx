@@ -385,24 +385,33 @@ function DashboardPage() {
       </div>
 
       {/* KPI Cards */}
+      {(() => {
+        const myTarget = targets.find(t => t.user_id === currentUserId);
+        return (
       <div className="grid grid-cols-6 gap-4">
         <KPICard
           label="架電数"
           value={kpi.totalCalls.toString()}
           unit="件"
           color="text-slate-800"
+          target={viewMode === 'personal' && myTarget ? myTarget.target_calls : undefined}
+          actual={viewMode === 'personal' ? kpi.totalCalls : undefined}
         />
         <KPICard
           label="担当接続数"
           value={kpi.connects.toString()}
           unit="件"
           color="text-blue-600"
+          target={viewMode === 'personal' && myTarget ? myTarget.target_connects : undefined}
+          actual={viewMode === 'personal' ? kpi.connects : undefined}
         />
         <KPICard
           label="アポ数"
           value={kpi.appointments.toString()}
           unit="件"
           color="text-green-600"
+          target={viewMode === 'personal' && myTarget ? myTarget.target_appointments : undefined}
+          actual={viewMode === 'personal' ? kpi.appointments : undefined}
         />
         <KPICard
           label="担当接続率"
@@ -423,6 +432,8 @@ function DashboardPage() {
           color="text-amber-600"
         />
       </div>
+        );
+      })()}
 
       {/* Trend Chart */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
@@ -524,59 +535,6 @@ function DashboardPage() {
         </div>
       )}
 
-      {/* Targets / Progress */}
-      {targets.length > 0 && (
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-          <h2 className="text-lg font-semibold text-gray-800 mb-4">
-            予実管理
-          </h2>
-          <div className="space-y-6">
-            {targets
-              .filter(
-                (t) => viewMode === 'team' || t.user_id === currentUserId
-              )
-              .map((target) => {
-                const memberLogs = memberStats.find(
-                  (m) => m.profile.id === target.user_id
-                );
-                const actualCalls = memberLogs?.calls || 0;
-                const actualConnects = memberLogs?.connects || 0;
-                const actualAppointments = memberLogs?.appointments || 0;
-
-                return (
-                  <div
-                    key={target.id}
-                    className="border border-gray-100 rounded-lg p-4"
-                  >
-                    <h3 className="font-medium text-gray-800 mb-3">
-                      {target.profiles?.name || '不明'}
-                    </h3>
-                    <div className="space-y-3">
-                      <ProgressBar
-                        label="架電数"
-                        actual={actualCalls}
-                        target={target.target_calls}
-                        color="bg-slate-600"
-                      />
-                      <ProgressBar
-                        label="接続数"
-                        actual={actualConnects}
-                        target={target.target_connects}
-                        color="bg-blue-500"
-                      />
-                      <ProgressBar
-                        label="アポ数"
-                        actual={actualAppointments}
-                        target={target.target_appointments}
-                        color="bg-green-500"
-                      />
-                    </div>
-                  </div>
-                );
-              })}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -586,12 +544,20 @@ function KPICard({
   value,
   unit,
   color,
+  target,
+  actual,
 }: {
   label: string;
   value: string;
   unit: string;
   color: string;
+  target?: number;
+  actual?: number;
 }) {
+  const hasTarget = target !== undefined && actual !== undefined && target > 0;
+  const pct = hasTarget ? (actual! / target!) * 100 : 0;
+  const progressColor = pct >= 80 ? 'bg-green-500' : pct >= 50 ? 'bg-amber-400' : 'bg-red-400';
+
   return (
     <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
       <p className="text-xs font-medium text-gray-500 mb-1">{label}</p>
@@ -601,6 +567,20 @@ function KPICard({
           {unit}
         </span>
       </p>
+      {hasTarget && (
+        <div className="mt-2">
+          <div className="flex justify-between text-[10px] text-gray-400 mb-0.5">
+            <span>目標: {target}</span>
+            <span>{Math.round(pct)}%</span>
+          </div>
+          <div className="w-full bg-gray-100 rounded-full h-1.5">
+            <div
+              className={`h-1.5 rounded-full transition-all ${progressColor}`}
+              style={{ width: `${Math.min(100, pct)}%` }}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
