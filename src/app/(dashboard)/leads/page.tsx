@@ -31,7 +31,7 @@ const DEFAULT_COLUMN_ORDER = [
   'company_name', 'contact_name', 'phone', 'email', 'homepage',
   'lead_source', 'inquiry_date', 'inquiry_content', 'hs_listing_plan',
   'hs_deal_exists', 'hs_deal_owner', 'hs_deal_created_at', 'priority', 'status',
-  'next_activity_date', 'assigned_to', 'memo',
+  'next_activity_date', 'assigned_to', 'call_count', 'memo',
 ];
 
 const COLUMN_LABELS: Record<string, string> = {
@@ -51,6 +51,7 @@ const COLUMN_LABELS: Record<string, string> = {
   status: 'ステータス',
   next_activity_date: '次回予定',
   assigned_to: '担当',
+  call_count: '架電回数',
   memo: 'メモ',
 };
 
@@ -71,6 +72,7 @@ function LeadsPage() {
   const [totalCount, setTotalCount] = useState(0);
   const [todayCount, setTodayCount] = useState(0);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [callCounts, setCallCounts] = useState<Record<string, number>>({});
   const [viewMode, setViewMode] = useState<'all' | 'today'>(() => searchParams.get('view') === 'today' ? 'today' : 'all');
   const [page, setPage] = useState(() => Number(searchParams.get('page') || '0'));
   const [search, setSearch] = useState(() => searchParams.get('q') || '');
@@ -157,7 +159,7 @@ function LeadsPage() {
   const [columnOrder, setColumnOrder] = useState<string[]>(() => {
     if (typeof window !== 'undefined') {
       // カラム構成が変わったらlocalStorageをリセット
-      const COLUMN_VERSION = '2'; // カラム追加時にインクリメント
+      const COLUMN_VERSION = '3'; // カラム追加時にインクリメント
       const savedVersion = localStorage.getItem('callboard-column-version');
       if (savedVersion !== COLUMN_VERSION) {
         localStorage.removeItem('callboard-column-order');
@@ -364,12 +366,39 @@ function LeadsPage() {
         query = applyTodayFilter(query, currentUserId) as typeof query;
       }
 
+      // For call_count sort, we need to handle it client-side since it's a computed field
+      const effectiveSortColumn = sortColumn === 'call_count' ? 'created_at' : sortColumn;
       const { data, count } = await query
-        .order(sortColumn, { ascending: sortAscending })
+        .order(effectiveSortColumn, { ascending: sortAscending })
         .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
 
-      setLeads(data || []);
+      const loadedLeads = data || [];
       setTotalCount(count || 0);
+
+      // Fetch call counts for loaded leads
+      let counts: Record<string, number> = {};
+      if (loadedLeads.length > 0) {
+        const leadIds = loadedLeads.map(l => l.id);
+        const { data: logData } = await supabase
+          .from('call_logs')
+          .select('lead_id')
+          .in('lead_id', leadIds)
+          .eq('activity_type', 'call');
+        for (const row of (logData || [])) {
+          counts[row.lead_id] = (counts[row.lead_id] || 0) + 1;
+        }
+        setCallCounts(counts);
+      }
+
+      // Client-side sort by call_count if needed
+      if (sortColumn === 'call_count') {
+        loadedLeads.sort((a, b) => {
+          const ca = counts[a.id] || 0;
+          const cb = counts[b.id] || 0;
+          return sortAscending ? ca - cb : cb - ca;
+        });
+      }
+      setLeads(loadedLeads);
     } catch (err) {
       console.error('Load leads error:', err);
     } finally {
@@ -1846,6 +1875,15 @@ function LeadsPage() {
             )}
           </td>
         );
+      case 'call_count': {
+        const cnt = callCounts[lead.id] || 0;
+        const cntColor = cnt === 0 ? 'text-gray-400' : cnt >= 3 ? 'font-semibold text-orange-600' : 'text-gray-700';
+        return (
+          <td key={colKey} className={`py-2 px-3 text-sm text-center ${cntColor}`}>
+            {cnt === 0 ? '-' : cnt}
+          </td>
+        );
+      }
       default:
         return <td key={colKey} className="py-2 px-3 text-sm text-gray-400">-</td>;
     }
