@@ -6,6 +6,89 @@ import Link from 'next/link';
 import { createClient } from '@/lib/supabase';
 import type { Profile } from '@/lib/types';
 
+function InviteModal({ onClose }: { onClose: () => void }) {
+  const [email, setEmail] = useState('');
+  const [name, setName] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [success, setSuccess] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleInvite = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError('');
+
+    const res = await fetch('/api/invite', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, name }),
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      setError(data.error || '招待の送信に失敗しました');
+      setLoading(false);
+      return;
+    }
+
+    setSuccess(true);
+    setLoading(false);
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-sm mx-4 p-6" onClick={(e) => e.stopPropagation()}>
+        <h2 className="text-base font-semibold text-gray-800 mb-4">メンバーを招待</h2>
+
+        {success ? (
+          <div className="text-center py-4">
+            <p className="text-green-600 font-medium mb-1">招待メールを送信しました</p>
+            <p className="text-sm text-gray-500 mb-4">{email} に招待リンクを送りました</p>
+            <button onClick={onClose} className="px-4 py-2 bg-slate-800 text-white text-sm rounded-lg hover:bg-slate-700">
+              閉じる
+            </button>
+          </div>
+        ) : (
+          <form onSubmit={handleInvite} className="space-y-3">
+            {error && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">{error}</div>
+            )}
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">名前</label>
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-500"
+                placeholder="山田 太郎"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">メールアドレス</label>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-500"
+                placeholder="user@example.com"
+              />
+            </div>
+            <div className="flex gap-2 pt-1">
+              <button type="button" onClick={onClose} className="flex-1 py-2 border border-gray-300 text-sm rounded-lg hover:bg-gray-50">
+                キャンセル
+              </button>
+              <button type="submit" disabled={loading} className="flex-1 py-2 bg-slate-800 text-white text-sm rounded-lg hover:bg-slate-700 disabled:opacity-50">
+                {loading ? '送信中...' : '招待を送る'}
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
+    </div>
+  );
+}
+
 const NAV_ITEMS = [
   { href: '/', label: 'ダッシュボード', icon: ChartIcon },
   { href: '/leads', label: '架電リスト', icon: ListIcon },
@@ -52,6 +135,7 @@ export default function DashboardLayout({
 }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [showInvite, setShowInvite] = useState(false);
   const router = useRouter();
   const pathname = usePathname();
   const supabase = createClient();
@@ -123,6 +207,17 @@ export default function DashboardLayout({
         </nav>
 
         <div className="px-3 py-4 border-t border-slate-700">
+          {profile?.role === 'manager' && (
+            <button
+              onClick={() => setShowInvite(true)}
+              className="flex items-center gap-3 w-full px-3 py-2 mb-1 text-sm text-slate-300 hover:text-white hover:bg-slate-700/50 rounded-lg transition-colors"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
+              </svg>
+              メンバーを招待
+            </button>
+          )}
           <div className="flex items-center gap-3 px-3 py-2">
             <div className="w-8 h-8 rounded-full bg-slate-600 flex items-center justify-center text-sm font-medium">
               {profile?.name?.charAt(0) || '?'}
@@ -148,6 +243,8 @@ export default function DashboardLayout({
       <main className="flex-1 bg-gray-50 overflow-auto">
         <div className="p-6">{children}</div>
       </main>
+
+      {showInvite && <InviteModal onClose={() => setShowInvite(false)} />}
     </div>
   );
 }
