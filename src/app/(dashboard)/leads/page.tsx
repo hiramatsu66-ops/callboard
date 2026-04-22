@@ -2321,54 +2321,6 @@ function LeadsPage() {
                     </button>
                   </div>
                 )}
-                {selectedLead.email && (
-                  <div className="pt-1">
-                    <button
-                      onClick={() => setShowMailPanel(!showMailPanel)}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700 transition-colors"
-                    >
-                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                      </svg>
-                      メールを送る
-                    </button>
-                    {showMailPanel && (
-                      <div className="mt-2 p-2 bg-gray-50 rounded-lg border border-gray-200 space-y-2">
-                        <p className="text-[10px] text-gray-500">宛先: {selectedLead.email}</p>
-                        <a
-                          href={buildGmailUrl()}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="block w-full text-center px-2 py-1.5 border border-gray-300 rounded text-xs text-gray-700 hover:bg-white transition-colors"
-                        >
-                          空のメールを作成
-                        </a>
-                        {emailTemplates.length > 0 && (
-                          <div className="border-t border-gray-200 pt-2">
-                            <p className="text-[10px] font-medium text-gray-500 mb-1">テンプレートから作成</p>
-                            {emailTemplates.map((tpl) => (
-                              <a
-                                key={tpl.id}
-                                href={buildGmailUrl(tpl)}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="block w-full text-left px-2 py-1.5 text-xs text-blue-700 hover:bg-blue-50 rounded transition-colors"
-                              >
-                                {tpl.name}
-                              </a>
-                            ))}
-                          </div>
-                        )}
-                        <button
-                          onClick={() => setShowTemplateEditor(true)}
-                          className="w-full text-center px-2 py-1.5 border border-dashed border-gray-300 rounded text-[10px] text-gray-500 hover:text-gray-700 hover:border-gray-400 transition-colors"
-                        >
-                          テンプレートを管理
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                )}
                 {selectedLead.memo && (
                   <p className="text-xs text-gray-500">メモ: {selectedLead.memo}</p>
                 )}
