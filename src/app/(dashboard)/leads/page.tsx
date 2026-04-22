@@ -872,10 +872,10 @@ function LeadsPage() {
     const updateData: Record<string, unknown> = {};
     if (field === 'assigned_to') {
       updateData[field] = editCellValue || null;
-    } else if (field === 'next_activity_date' || field === 'inquiry_date') {
+    } else if (field === 'next_activity_date' || field === 'inquiry_date' || field === 'hs_deal_created_at') {
       updateData[field] = editCellValue || null;
-    } else if (field === 'status') {
-      updateData[field] = editCellValue;
+    } else if (field === 'hs_deal_exists') {
+      updateData[field] = editCellValue === '' ? null : editCellValue === 'true';
     } else {
       updateData[field] = editCellValue;
     }
@@ -1564,39 +1564,87 @@ function LeadsPage() {
           : plan === 'お試しプラン' ? 'bg-amber-100 text-amber-800'
           : '';
         return (
-          <td key={colKey} className="py-2 px-3 text-center whitespace-nowrap">
-            {plan ? (
-              <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-medium ${planColor}`}>{planLabel}</span>
+          <td key={colKey} className="py-2 px-3 text-center whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+            {isEditing(lead.id, 'hs_listing_plan') ? (
+              <input
+                type="text"
+                value={editCellValue}
+                onChange={(e) => setEditCellValue(e.target.value)}
+                onBlur={() => saveCell(lead.id, 'hs_listing_plan')}
+                onKeyDown={(e) => { if (e.key === 'Enter') saveCell(lead.id, 'hs_listing_plan'); if (e.key === 'Escape') cancelEditCell(); }}
+                autoFocus
+                className="px-1 py-0.5 border border-blue-400 rounded text-xs focus:outline-none w-24"
+              />
+            ) : plan ? (
+              <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-medium cursor-pointer hover:opacity-80 ${planColor}`} onClick={() => startEditCell(lead.id, 'hs_listing_plan', plan)}>{planLabel}</span>
             ) : (
-              <span className="text-gray-300 text-xs">-</span>
+              <span className="text-gray-300 text-xs cursor-pointer hover:text-gray-400" onClick={() => startEditCell(lead.id, 'hs_listing_plan', '')}>-</span>
             )}
           </td>
         );
       }
       case 'hs_deal_exists':
         return (
-          <td key={colKey} className="py-2 px-3 text-center">
-            {lead.hs_deal_exists === null ? (
-              <span className="text-gray-300 text-xs">-</span>
+          <td key={colKey} className="py-2 px-3 text-center" onClick={(e) => e.stopPropagation()}>
+            {isEditing(lead.id, 'hs_deal_exists') ? (
+              <select
+                value={editCellValue}
+                onChange={(e) => setEditCellValue(e.target.value)}
+                onBlur={() => saveCell(lead.id, 'hs_deal_exists')}
+                autoFocus
+                className="px-1 py-0.5 border border-blue-400 rounded text-xs focus:outline-none bg-white"
+              >
+                <option value="">未確認</option>
+                <option value="true">商談済</option>
+                <option value="false">未商談</option>
+              </select>
+            ) : lead.hs_deal_exists === null ? (
+              <span className="text-gray-300 text-xs cursor-pointer hover:text-gray-400" onClick={() => startEditCell(lead.id, 'hs_deal_exists', '')}>-</span>
             ) : lead.hs_deal_exists ? (
-              <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-100 text-red-700">商談済</span>
+              <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-100 text-red-700 cursor-pointer hover:opacity-80" onClick={() => startEditCell(lead.id, 'hs_deal_exists', 'true')}>商談済</span>
             ) : (
-              <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-700">未商談</span>
+              <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-700 cursor-pointer hover:opacity-80" onClick={() => startEditCell(lead.id, 'hs_deal_exists', 'false')}>未商談</span>
             )}
           </td>
         );
       case 'hs_deal_owner':
         return (
-          <td key={colKey} className="py-2 px-3 text-xs text-gray-700 whitespace-nowrap">
-            {lead.hs_deal_exists ? (lead.hs_deal_owner || '-') : '-'}
+          <td key={colKey} className="py-2 px-3 text-xs text-gray-700 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+            {isEditing(lead.id, 'hs_deal_owner') ? (
+              <input
+                type="text"
+                value={editCellValue}
+                onChange={(e) => setEditCellValue(e.target.value)}
+                onBlur={() => saveCell(lead.id, 'hs_deal_owner')}
+                onKeyDown={(e) => { if (e.key === 'Enter') saveCell(lead.id, 'hs_deal_owner'); if (e.key === 'Escape') cancelEditCell(); }}
+                autoFocus
+                className="px-1 py-0.5 border border-blue-400 rounded text-xs focus:outline-none w-24"
+              />
+            ) : (
+              <span className="cursor-text hover:bg-blue-50 px-1 py-0.5 rounded -mx-1 block" onClick={() => startEditCell(lead.id, 'hs_deal_owner', lead.hs_deal_owner || '')}>
+                {lead.hs_deal_owner || '-'}
+              </span>
+            )}
           </td>
         );
       case 'hs_deal_created_at':
         return (
-          <td key={colKey} className="py-2 px-3 text-xs text-gray-700 whitespace-nowrap">
-            {lead.hs_deal_exists && lead.hs_deal_created_at
-              ? new Date(lead.hs_deal_created_at).toLocaleDateString('ja-JP')
-              : '-'}
+          <td key={colKey} className="py-2 px-3 text-xs text-gray-700 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+            {isEditing(lead.id, 'hs_deal_created_at') ? (
+              <input
+                type="date"
+                value={editCellValue ? editCellValue.slice(0, 10) : ''}
+                onChange={(e) => setEditCellValue(e.target.value)}
+                onBlur={() => saveCell(lead.id, 'hs_deal_created_at')}
+                onKeyDown={(e) => { if (e.key === 'Enter') saveCell(lead.id, 'hs_deal_created_at'); if (e.key === 'Escape') cancelEditCell(); }}
+                autoFocus
+                className="px-1 py-0.5 border border-blue-400 rounded text-xs focus:outline-none"
+              />
+            ) : (
+              <span className="cursor-text hover:bg-blue-50 px-1 py-0.5 rounded -mx-1 block" onClick={() => startEditCell(lead.id, 'hs_deal_created_at', lead.hs_deal_created_at || '')}>
+                {lead.hs_deal_created_at ? new Date(lead.hs_deal_created_at).toLocaleDateString('ja-JP') : '-'}
+              </span>
+            )}
           </td>
         );
       case 'priority':
