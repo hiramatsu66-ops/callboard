@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { createClient } from '@/lib/supabase';
 import type { Target, Profile, PeriodType } from '@/lib/types';
-import { startOfMonth, startOfWeek, format } from 'date-fns';
+import { startOfMonth, startOfWeek, endOfMonth, format } from 'date-fns';
 
 interface PeriodForm {
   periodStart: string;
@@ -19,6 +19,11 @@ export default function TargetsPage() {
   const [currentUserRole, setCurrentUserRole] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+
+  // Actual progress state (for current month)
+  const [actualCalls, setActualCalls] = useState(0);
+  const [actualConnects, setActualConnects] = useState(0);
+  const [actualAppointments, setActualAppointments] = useState(0);
 
   // 3-section form state
   const [dailyForm, setDailyForm] = useState<PeriodForm>({
@@ -116,6 +121,20 @@ export default function TargetsPage() {
           appointments: existingMonthly.target_appointments,
         });
       }
+
+      // Load actual call_logs for current month
+      const monthEnd = format(endOfMonth(new Date()), 'yyyy-MM-dd');
+      const { data: callLogsData } = await supabase
+        .from('call_logs')
+        .select('result')
+        .eq('caller_id', user.id)
+        .gte('called_at', monthStartStr)
+        .lte('called_at', monthEnd + 'T23:59:59');
+
+      const logs = callLogsData || [];
+      setActualCalls(logs.length);
+      setActualConnects(logs.filter((l) => l.result === 'connected' || l.result === 'appointment').length);
+      setActualAppointments(logs.filter((l) => l.result === 'appointment').length);
     } catch (err) {
       console.error('Load targets error:', err);
     } finally {
@@ -344,6 +363,45 @@ export default function TargetsPage() {
               </tbody>
             </table>
           )}
+        </div>
+      )}
+
+      {/* 今月の進捗 */}
+      {currentUserRole !== 'manager' && (
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+          <h2 className="text-lg font-semibold text-gray-800 mb-4">
+            今月の進捗（{format(startOfMonth(new Date()), 'yyyy/MM')}）
+          </h2>
+          <div className="grid grid-cols-3 gap-4">
+            {([
+              { label: '架電数', actual: actualCalls, target: monthlyForm.calls, color: 'text-slate-800' },
+              { label: '接続数', actual: actualConnects, target: monthlyForm.connects, color: 'text-blue-600' },
+              { label: 'アポ数', actual: actualAppointments, target: monthlyForm.appointments, color: 'text-green-600' },
+            ] as { label: string; actual: number; target: number; color: string }[]).map(({ label, actual, target, color }) => {
+              const pct = target > 0 ? Math.min(100, Math.round((actual / target) * 100)) : null;
+              const barColor = pct === null ? 'bg-gray-300' : pct >= 80 ? 'bg-green-500' : pct >= 50 ? 'bg-amber-400' : 'bg-red-400';
+              return (
+                <div key={label} className="bg-gray-50 rounded-lg p-4">
+                  <p className="text-xs text-gray-500 mb-1">{label}</p>
+                  <p className={`text-2xl font-bold ${color}`}>{actual}</p>
+                  {target > 0 && (
+                    <p className="text-xs text-gray-400 mt-0.5">目標 {target}</p>
+                  )}
+                  {pct !== null && (
+                    <div className="mt-2">
+                      <div className="flex justify-between text-xs text-gray-500 mb-0.5">
+                        <span>達成率</span>
+                        <span>{pct}%</span>
+                      </div>
+                      <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                        <div className={`h-full ${barColor} rounded-full`} style={{ width: `${pct}%` }} />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
