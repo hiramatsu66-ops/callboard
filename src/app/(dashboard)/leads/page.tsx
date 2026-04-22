@@ -146,6 +146,9 @@ function LeadsPage() {
   const [editLogResult, setEditLogResult] = useState<CallResult>('no_answer');
   const [editLogMemo, setEditLogMemo] = useState('');
 
+  // Auto re-surface: preview next activity date when no_answer selected
+  const [autoNextDatePreview, setAutoNextDatePreview] = useState<string | null>(null);
+
   // Inline edit state: { leadId-field: value }
   const [editingCell, setEditingCell] = useState<string | null>(null);
   const [editCellValue, setEditCellValue] = useState('');
@@ -439,12 +442,62 @@ function LeadsPage() {
     loadSidebarData(lead);
   };
 
+  // Add N business days to a date (skip weekends)
+  const addBusinessDays = (date: Date, days: number): Date => {
+    const result = new Date(date);
+    let added = 0;
+    while (added < days) {
+      result.setDate(result.getDate() + 1);
+      const dow = result.getDay();
+      if (dow !== 0 && dow !== 6) added++; // skip Sun=0, Sat=6
+    }
+    return result;
+  };
+
+  // Compute auto next_activity_date for no_answer based on count
+  const computeNoAnswerNextDate = (noAnswerCount: number): string => {
+    const today = new Date();
+    const daysToAdd = noAnswerCount <= 1 ? 1 : noAnswerCount === 2 ? 2 : 3;
+    const nextDate = addBusinessDays(today, daysToAdd);
+    return nextDate.toISOString().split('T')[0];
+  };
+
+  // Preview auto next date when hovering/focusing no_answer button
+  const handleNoAnswerHover = async () => {
+    if (!selectedLead) return;
+    const { count } = await supabase
+      .from('call_logs')
+      .select('*', { count: 'exact', head: true })
+      .eq('lead_id', selectedLead.id)
+      .eq('result', 'no_answer');
+    const nextCount = (count || 0) + 1; // this will be the new count after saving
+    const autoDate = computeNoAnswerNextDate(nextCount);
+    setAutoNextDatePreview(autoDate);
+  };
+
   const handleRecordActivity = async (result: CallResult) => {
     if (!selectedLead) return;
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
     const isEmail = result === 'email_sent';
+
+    // For no_answer: compute auto next activity date
+    let effectiveNextDate = nextActivityDate || null;
+    if (result === 'no_answer') {
+      const { count } = await supabase
+        .from('call_logs')
+        .select('*', { count: 'exact', head: true })
+        .eq('lead_id', selectedLead.id)
+        .eq('result', 'no_answer');
+      const nextCount = (count || 0) + 1;
+      const autoDate = computeNoAnswerNextDate(nextCount);
+      // Only use auto date if user hasn't manually set a date (or auto preview matches)
+      if (!nextActivityDate || nextActivityDate === autoNextDatePreview) {
+        effectiveNextDate = autoDate;
+      }
+    }
+
     await supabase.from('call_logs').insert({
       lead_id: selectedLead.id,
       caller_id: user.id,
@@ -465,11 +518,12 @@ function LeadsPage() {
       .from('leads')
       .update({
         status: newStatus,
-        next_activity_date: nextActivityDate || null,
+        next_activity_date: effectiveNextDate,
       })
       .eq('id', selectedLead.id);
 
     setActivityMemo('');
+    setAutoNextDatePreview(null);
     const { data: updatedLead } = await supabase
       .from('leads')
       .select('*')
@@ -2472,12 +2526,27 @@ function LeadsPage() {
                     <button
                       key={result}
                       onClick={() => handleRecordActivity(result)}
+                      onMouseEnter={result === 'no_answer' ? handleNoAnswerHover : undefined}
+                      onMouseLeave={result === 'no_answer' ? () => setAutoNextDatePreview(null) : undefined}
                       className={`py-2 px-1 rounded-lg text-xs font-medium transition-colors ${CALL_RESULT_COLORS[result]}`}
                     >
                       {CALL_RESULT_LABELS[result]}
                     </button>
                   ))}
                 </div>
+                {autoNextDatePreview && (
+                  <div className="mt-2 p-2 bg-amber-50 border border-amber-200 rounded-lg">
+                    <p className="text-[10px] text-amber-700 font-medium">
+                      次回架電日を自動セット：{new Date(autoNextDatePreview).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric', weekday: 'short' })}
+                    </p>
+                    <input
+                      type="date"
+                      value={nextActivityDate || autoNextDatePreview}
+                      onChange={(e) => setNextActivityDate(e.target.value)}
+                      className="mt-1 w-full px-2 py-1 border border-amber-300 rounded text-xs focus:outline-none focus:ring-1 focus:ring-amber-500 bg-white"
+                    />
+                  </div>
+                )}
                 <p className="text-[10px] text-gray-400 mb-1 mt-2">メール</p>
                 <button
                   onClick={() => handleRecordActivity('email_sent')}
