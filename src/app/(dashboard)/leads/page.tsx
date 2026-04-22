@@ -2574,8 +2574,6 @@ function LeadsPage() {
           className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
           onClick={() => { setShowAddModal(false); setAddForm({ company_name: '', phone: '', contact_name: '', email: '', homepage: '', lead_source: '', inquiry_date: '', inquiry_content: '', memo: '' }); }}
           onKeyDown={(e) => { if (e.key === 'Escape') { setShowAddModal(false); setAddForm({ company_name: '', phone: '', contact_name: '', email: '', homepage: '', lead_source: '', inquiry_date: '', inquiry_content: '', memo: '' }); } }}
-          tabIndex={-1}
-          ref={(el) => el?.focus()}
         >
           <div className="bg-white rounded-lg shadow-lg w-full max-w-md mx-4" onClick={(e) => e.stopPropagation()}>
             <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
