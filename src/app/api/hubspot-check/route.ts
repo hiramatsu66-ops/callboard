@@ -43,6 +43,7 @@ interface DealInfo {
   excludeReason: string;
   listingPlan: string; // 掲載プラン
   kintoneCreatedAt: string | null;
+  contactPhone: string | null;
 }
 
 interface CompanyInfo {
@@ -149,7 +150,7 @@ async function buildOwnerMap(token: string): Promise<Map<string, string>> {
 async function searchContactIds(
   query: string,
   token: string
-): Promise<string[]> {
+): Promise<{ id: string; phone: string | null }[]> {
   // search APIで検索
   const res = await fetch(`${HUBSPOT_API}/crm/v3/objects/contacts/search`, {
     method: 'POST',
@@ -159,15 +160,18 @@ async function searchContactIds(
     },
     body: JSON.stringify({
       query,
-      properties: ['firstname', 'lastname', 'email'],
+      properties: ['firstname', 'lastname', 'email', 'phone'],
       limit: 10,
     }),
   });
 
   if (res.ok) {
     const data = await res.json();
-    const ids = (data.results || []).map((r: { id: string }) => r.id);
-    if (ids.length > 0) return ids;
+    const contacts = (data.results || []).map((r: { id: string; properties: Record<string, string> }) => ({
+      id: r.id,
+      phone: r.properties.phone || null,
+    }));
+    if (contacts.length > 0) return contacts;
   }
 
   return [];
@@ -176,14 +180,15 @@ async function searchContactIds(
 async function lookupContactByEmail(
   email: string,
   token: string
-): Promise<string | null> {
+): Promise<{ id: string; phone: string | null } | null> {
   const res = await fetch(
-    `${HUBSPOT_API}/crm/v3/objects/contacts/${encodeURIComponent(email)}?idProperty=email`,
+    `${HUBSPOT_API}/crm/v3/objects/contacts/${encodeURIComponent(email)}?idProperty=email&properties=phone`,
     { headers: { Authorization: `Bearer ${token}` } }
   );
   if (!res.ok) return null;
   const data = await res.json();
-  return data.id || null;
+  if (!data.id) return null;
+  return { id: data.id, phone: data.properties?.phone || null };
 }
 
 async function getDealsForContact(
@@ -219,7 +224,8 @@ function pickBestDeal(
   deals: { dealname: string; hubspot_owner_id: string; createdate: string; dealstage: string }[],
   ownerMap: Map<string, string>,
   companyPlan: string = '',
-  kintoneCreatedAt: string | null = null
+  kintoneCreatedAt: string | null = null,
+  contactPhone: string | null = null
 ): DealInfo | null {
   if (deals.length === 0) return null;
   // Prefer qualified stage deal, otherwise use the most recent deal
@@ -243,6 +249,7 @@ function pickBestDeal(
     excludeReason,
     listingPlan: companyPlan,
     kintoneCreatedAt,
+    contactPhone,
   };
 }
 
@@ -267,7 +274,7 @@ async function checkCompanyDeal(
   token: string,
   ownerMap: Map<string, string>
 ): Promise<DealInfo> {
-  const noDeal: DealInfo = { exists: false, ownerName: '', createdAt: null, dealStage: '', shouldExclude: false, excludeReason: '', listingPlan: '', kintoneCreatedAt: null };
+  const noDeal: DealInfo = { exists: false, ownerName: '', createdAt: null, dealStage: '', shouldExclude: false, excludeReason: '', listingPlan: '', kintoneCreatedAt: null, contactPhone: null };
 
   // 1. 会社名で検索
   let companies = await searchCompanies(companyName, token);
@@ -300,21 +307,21 @@ async function checkCompanyDeal(
 
   // 3. メールアドレスでコンタクト検索 → コンタクトに紐づく商談を直接検索
   if (email) {
-    const directContactId = await lookupContactByEmail(email, token);
-    const contactIds = directContactId ? [directContactId] : await searchContactIds(email, token);
-    for (const contactId of contactIds) {
-      const deals = await getDealsForContact(contactId, token);
-      const result = pickBestDeal(deals, ownerMap, companyPlan);
+    const directContact = await lookupContactByEmail(email, token);
+    const contacts = directContact ? [directContact] : await searchContactIds(email, token);
+    for (const contact of contacts) {
+      const deals = await getDealsForContact(contact.id, token);
+      const result = pickBestDeal(deals, ownerMap, companyPlan, companyKintoneCreatedAt, contact.phone);
       if (result) return result;
     }
   }
 
   // 4. 担当者名でコンタクト検索 → コンタクトに紐づく商談を直接検索
   if (contactName) {
-    const contactIds = await searchContactIds(contactName, token);
-    for (const contactId of contactIds) {
-      const deals = await getDealsForContact(contactId, token);
-      const result = pickBestDeal(deals, ownerMap, companyPlan);
+    const contacts = await searchContactIds(contactName, token);
+    for (const contact of contacts) {
+      const deals = await getDealsForContact(contact.id, token);
+      const result = pickBestDeal(deals, ownerMap, companyPlan, companyKintoneCreatedAt, contact.phone);
       if (result) return result;
     }
   }
@@ -347,6 +354,7 @@ export async function POST(request: NextRequest) {
       hs_deal_created_at: dealInfo.createdAt,
       hs_listing_plan: dealInfo.listingPlan,
       ...(dealInfo.kintoneCreatedAt !== null && { kintone_created_at: dealInfo.kintoneCreatedAt }),
+      ...(dealInfo.contactPhone !== null && { phone: dealInfo.contactPhone }),
     };
 
     // 受注済みまたは有料プラン利用中の場合、自動的にステータスを対象外に
@@ -369,6 +377,7 @@ export async function POST(request: NextRequest) {
       exclude_reason: dealInfo.excludeReason,
       listing_plan: dealInfo.listingPlan,
       kintone_created_at: dealInfo.kintoneCreatedAt,
+      contact_phone: dealInfo.contactPhone,
     });
   } catch (error) {
     console.error('HubSpot check error:', error);
