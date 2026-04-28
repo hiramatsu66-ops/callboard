@@ -21,11 +21,10 @@ export async function POST() {
 
   const supabase = createAdminClient();
 
-  // 電話番号が空でメールがあるリードを全件取得
+  // メールがあるリードを全件取得（phoneは問わず上書き）
   const { data: leads, error } = await supabase
     .from('leads')
     .select('id, company_name, email')
-    .or('phone.is.null,phone.eq.')
     .not('email', 'is', null)
     .neq('email', '');
 
