@@ -1,7 +1,8 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase';
 
 const HUBSPOT_API = 'https://api.hubapi.com';
+const BATCH_SIZE = 30;
 
 async function getContactPhone(email: string, token: string): Promise<string | null> {
   const res = await fetch(
@@ -13,27 +14,37 @@ async function getContactPhone(email: string, token: string): Promise<string | n
   return data.properties?.phone || null;
 }
 
-export async function POST() {
+export async function POST(request: NextRequest) {
   const token = process.env.HUBSPOT_TOKEN;
   if (!token) {
     return NextResponse.json({ error: 'HUBSPOT_TOKEN未設定' }, { status: 500 });
   }
 
+  const { offset = 0 } = await request.json().catch(() => ({ offset: 0 }));
   const supabase = createAdminClient();
 
-  // メールがあるリードを全件取得（phoneは問わず上書き）
+  // 全件数を取得
+  const { count } = await supabase
+    .from('leads')
+    .select('*', { count: 'exact', head: true })
+    .not('email', 'is', null)
+    .neq('email', '');
+
+  // offsetからBATCH_SIZE件取得
   const { data: leads, error } = await supabase
     .from('leads')
     .select('id, company_name, email')
     .not('email', 'is', null)
-    .neq('email', '');
+    .neq('email', '')
+    .order('created_at')
+    .range(offset, offset + BATCH_SIZE - 1);
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
   if (!leads || leads.length === 0) {
-    return NextResponse.json({ message: '対象リードなし', updated: 0, skipped: 0 });
+    return NextResponse.json({ done: true, total: count ?? 0, updated: 0, skipped: 0, next_offset: null });
   }
 
   let updated = 0;
@@ -53,14 +64,19 @@ export async function POST() {
     } catch {
       skipped++;
     }
-    // HubSpotのレートリミット対策
-    await new Promise(r => setTimeout(r, 100));
+    await new Promise(r => setTimeout(r, 80));
   }
 
+  const next_offset = offset + leads.length;
+  const done = next_offset >= (count ?? 0);
+
   return NextResponse.json({
-    total: leads.length,
+    done,
+    total: count ?? 0,
+    processed: next_offset,
     updated,
     skipped,
+    next_offset: done ? null : next_offset,
     results,
   });
 }
