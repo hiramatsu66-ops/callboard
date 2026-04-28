@@ -30,7 +30,7 @@ const supabase = createClient();
 const DEFAULT_COLUMN_ORDER = [
   'company_name', 'contact_name', 'phone', 'email', 'homepage',
   'lead_source', 'inquiry_date', 'inquiry_content', 'hs_listing_plan',
-  'hs_deal_exists', 'hs_deal_owner', 'hs_deal_created_at', 'priority', 'status',
+  'hs_deal_exists', 'hs_deal_owner', 'hs_deal_created_at', 'company_info_public', 'priority', 'status',
   'next_activity_date', 'assigned_to', 'call_count', 'memo',
 ];
 
@@ -47,6 +47,7 @@ const COLUMN_LABELS: Record<string, string> = {
   hs_deal_exists: '商談',
   hs_deal_owner: '商談担当',
   hs_deal_created_at: '取引作成日',
+  company_info_public: '企業情報公開',
   priority: '優先度',
   status: 'ステータス',
   next_activity_date: '次回予定',
@@ -177,7 +178,7 @@ function LeadsPage() {
   const [columnOrder, setColumnOrder] = useState<string[]>(() => {
     if (typeof window !== 'undefined') {
       // カラム構成が変わったらlocalStorageをリセット
-      const COLUMN_VERSION = '3'; // カラム追加時にインクリメント
+      const COLUMN_VERSION = '4'; // カラム追加時にインクリメント
       const savedVersion = localStorage.getItem('callboard-column-version');
       if (savedVersion !== COLUMN_VERSION) {
         localStorage.removeItem('callboard-column-order');
@@ -360,6 +361,16 @@ function LeadsPage() {
             query = query.eq('hs_deal_exists', true) as T;
           } else {
             query = query.or('hs_deal_exists.is.null,hs_deal_exists.eq.false') as T;
+          }
+        }
+        // If both selected, no filter needed
+      } else if (col === 'company_info_public') {
+        const values = Array.from(vals);
+        if (values.length === 1) {
+          if (values[0] === 'true') {
+            query = query.eq('company_info_public', true) as T;
+          } else {
+            query = query.or('company_info_public.is.null,company_info_public.eq.false') as T;
           }
         }
         // If both selected, no filter needed
@@ -1049,6 +1060,8 @@ function LeadsPage() {
       updateData[field] = editCellValue || null;
     } else if (field === 'hs_deal_exists') {
       updateData[field] = editCellValue === '' ? null : editCellValue === 'true';
+    } else if (field === 'company_info_public') {
+      updateData[field] = editCellValue === '' ? null : editCellValue === 'true';
     } else {
       updateData[field] = editCellValue;
     }
@@ -1132,6 +1145,7 @@ function LeadsPage() {
     priority: { options: { A: 'A', B: 'B', C: 'C', '': '未設定' }, colors: { ...PRIORITY_COLORS, '': 'bg-gray-50 text-gray-400' } },
     hs_listing_plan: { options: { 'プレミアムプラン': 'プレミアム', 'ベーシックプラン': 'ベーシック', 'ライトプラン': 'ライト', 'フリープラン': 'フリー', 'お試しプラン': 'お試し', '': '未設定' }, colors: { 'プレミアムプラン': 'bg-purple-100 text-purple-800', 'ベーシックプラン': 'bg-blue-100 text-blue-800', 'ライトプラン': 'bg-teal-100 text-teal-800', 'フリープラン': 'bg-gray-100 text-gray-600', 'お試しプラン': 'bg-amber-100 text-amber-800', '': 'bg-gray-50 text-gray-400' } },
     hs_deal_exists: { options: { 'true': '商談あり', 'false': '商談なし' }, colors: { 'true': 'bg-green-100 text-green-800', 'false': 'bg-gray-100 text-gray-600' } },
+    company_info_public: { options: { 'true': 'はい', 'false': 'いいえ' }, colors: { 'true': 'bg-green-100 text-green-800', 'false': 'bg-red-100 text-red-700' } },
     assigned_to: { options: {}, colors: {} }, // built dynamically from profiles
   }), []);
 
@@ -1260,6 +1274,74 @@ function LeadsPage() {
     loadLeads();
   };
 
+  // Bulk duplicate check
+  const [dupCheckResults, setDupCheckResults] = useState<Array<{
+    key: string;
+    type: 'email' | 'phone';
+    leads: Array<{ id: string; company_name: string; activityCount: number }>;
+  }>>([]);
+  const [showDupCheckModal, setShowDupCheckModal] = useState(false);
+  const [dupCheckLoading, setDupCheckLoading] = useState(false);
+  const [dupDeleteIds, setDupDeleteIds] = useState<Set<string>>(new Set());
+
+  const handleBulkDupCheck = async () => {
+    if (selectedIds.size < 2) { alert('2件以上選択してください'); return; }
+    setDupCheckLoading(true);
+    const ids = Array.from(selectedIds);
+
+    const { data: selectedLeadsData } = await supabase
+      .from('leads').select('id, company_name, email, phone').in('id', ids);
+
+    if (!selectedLeadsData?.length) { setDupCheckLoading(false); return; }
+
+    const { data: callCounts } = await supabase
+      .from('call_logs').select('lead_id').in('lead_id', ids);
+    const countMap: Record<string, number> = {};
+    for (const log of (callCounts || [])) countMap[log.lead_id] = (countMap[log.lead_id] || 0) + 1;
+
+    const emailGroups: Record<string, typeof selectedLeadsData> = {};
+    const phoneGroups: Record<string, typeof selectedLeadsData> = {};
+    for (const lead of selectedLeadsData) {
+      if (lead.email) { const k = lead.email.toLowerCase().trim(); (emailGroups[k] = emailGroups[k] || []).push(lead); }
+      if (lead.phone) { const k = normalizePhone(lead.phone); (phoneGroups[k] = phoneGroups[k] || []).push(lead); }
+    }
+
+    const results: typeof dupCheckResults = [];
+    const seenIds = new Set<string>();
+    for (const [key, leads] of Object.entries(emailGroups)) {
+      if (leads.length > 1) {
+        results.push({ key, type: 'email', leads: leads.map(l => ({ id: l.id, company_name: l.company_name, activityCount: countMap[l.id] || 0 })) });
+        leads.forEach(l => seenIds.add(l.id));
+      }
+    }
+    for (const [key, leads] of Object.entries(phoneGroups)) {
+      if (leads.length > 1 && !leads.every(l => seenIds.has(l.id))) {
+        results.push({ key, type: 'phone', leads: leads.map(l => ({ id: l.id, company_name: l.company_name, activityCount: countMap[l.id] || 0 })) });
+      }
+    }
+
+    // 活動記録が少ない方を自動選択
+    const autoDelete = new Set<string>();
+    for (const group of results) {
+      const sorted = [...group.leads].sort((a, b) => b.activityCount - a.activityCount);
+      sorted.slice(1).forEach(l => autoDelete.add(l.id));
+    }
+
+    setDupCheckResults(results);
+    setDupDeleteIds(autoDelete);
+    setShowDupCheckModal(true);
+    setDupCheckLoading(false);
+  };
+
+  const handleDupDelete = async () => {
+    if (dupDeleteIds.size === 0) return;
+    if (!confirm(`${dupDeleteIds.size}件の重複リードを削除しますか？`)) return;
+    await supabase.from('leads').delete().in('id', Array.from(dupDeleteIds));
+    setShowDupCheckModal(false);
+    setSelectedIds(new Set());
+    loadLeads();
+  };
+
   const handleBulkDelete = async () => {
     if (selectedIds.size === 0) return;
     const count = selectAllPages ? totalCount : selectedIds.size;
@@ -1320,7 +1402,7 @@ function LeadsPage() {
       .toLowerCase();
   };
 
-  const [csvSimilarDups, setCsvSimilarDups] = useState<Array<{ index: number; company: string; reason: string }>>([]);
+  const [csvSimilarDups, setCsvSimilarDups] = useState<Array<{ index: number; company: string; reason: string; existingActivityCount?: number; autoSkipped?: boolean }>>([]);
   const [csvSkipIndices, setCsvSkipIndices] = useState<Set<number>>(new Set());
   const [checkingSimilar, setCheckingSimilar] = useState(false);
 
@@ -1332,18 +1414,66 @@ function LeadsPage() {
 
     const { data: existingLeads } = await supabase
       .from('leads')
-      .select('company_name, phone');
+      .select('id, company_name, phone, email');
 
     const normalizedExisting = (existingLeads || []).map(l => ({
+      id: l.id,
       normCompany: normalizeCompany(l.company_name || ''),
       normPhone: normalizePhone(l.phone || ''),
+      email: (l.email || '').toLowerCase().trim(),
       original: l,
     }));
 
-    const dups: Array<{ index: number; company: string; reason: string }> = [];
+    const dups: Array<{ index: number; company: string; reason: string; existingActivityCount?: number; autoSkipped?: boolean }> = [];
+    const autoSkipSet = new Set<number>();
+    const flaggedIndices = new Set<number>();
     const m = csvColumnMapping;
 
+    // ① メールアドレス重複チェック（活動記録数で優先判定）
+    const emailRows: { index: number; email: string; company: string }[] = [];
     csvData.forEach((row, i) => {
+      const email = (m.email ? row[m.email] : '')?.trim().toLowerCase();
+      const company = (m.company_name ? row[m.company_name] : '')?.trim() || '';
+      if (email) emailRows.push({ index: i, email, company });
+    });
+
+    if (emailRows.length > 0) {
+      const emailMatches = normalizedExisting.filter(e => e.email && emailRows.some(r => r.email === e.email));
+      if (emailMatches.length > 0) {
+        const matchIds = emailMatches.map(e => e.id);
+        const { data: callCounts } = await supabase
+          .from('call_logs')
+          .select('lead_id')
+          .in('lead_id', matchIds);
+
+        const countMap: Record<string, number> = {};
+        for (const log of (callCounts || [])) {
+          countMap[log.lead_id] = (countMap[log.lead_id] || 0) + 1;
+        }
+
+        for (const row of emailRows) {
+          const match = emailMatches.find(e => e.email === row.email);
+          if (!match) continue;
+          const actCount = countMap[match.id] || 0;
+          const autoSkipRow = actCount > 0;
+          dups.push({
+            index: row.index,
+            company: row.company,
+            reason: actCount > 0
+              ? `メール一致（${match.original.company_name}・活動記録${actCount}件）→ 既存を優先`
+              : `メール一致（${match.original.company_name}・活動記録なし）`,
+            existingActivityCount: actCount,
+            autoSkipped: autoSkipRow,
+          });
+          if (autoSkipRow) autoSkipSet.add(row.index);
+          flaggedIndices.add(row.index);
+        }
+      }
+    }
+
+    // ② 会社名・電話番号の類似チェック（メール重複と重複しない行のみ）
+    csvData.forEach((row, i) => {
+      if (flaggedIndices.has(i)) return;
       const company = (m.company_name ? row[m.company_name] : '')?.trim() || '';
       const phone = (m.phone ? row[m.phone] : '')?.trim() || '';
       if (!company) return;
@@ -1364,6 +1494,7 @@ function LeadsPage() {
     });
 
     setCsvSimilarDups(dups);
+    setCsvSkipIndices(autoSkipSet);
     setCheckingSimilar(false);
   }, [csvData, csvColumnMapping]);
 
@@ -1890,6 +2021,30 @@ function LeadsPage() {
             )}
           </td>
         );
+      case 'company_info_public':
+        return (
+          <td key={colKey} className="py-2 px-3 text-center" onClick={(e) => e.stopPropagation()}>
+            {isEditing(lead.id, 'company_info_public') ? (
+              <select
+                value={editCellValue}
+                onChange={(e) => setEditCellValue(e.target.value)}
+                onBlur={() => saveCell(lead.id, 'company_info_public')}
+                autoFocus
+                className="px-1 py-0.5 border border-blue-400 rounded text-xs focus:outline-none bg-white"
+              >
+                <option value="">未設定</option>
+                <option value="true">はい</option>
+                <option value="false">いいえ</option>
+              </select>
+            ) : lead.company_info_public === null ? (
+              <span className="text-gray-300 text-xs cursor-pointer hover:text-gray-400" onClick={() => startEditCell(lead.id, 'company_info_public', '')}>-</span>
+            ) : lead.company_info_public ? (
+              <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-700 cursor-pointer hover:opacity-80" onClick={() => startEditCell(lead.id, 'company_info_public', 'true')}>はい</span>
+            ) : (
+              <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-100 text-red-700 cursor-pointer hover:opacity-80" onClick={() => startEditCell(lead.id, 'company_info_public', 'false')}>いいえ</span>
+            )}
+          </td>
+        );
       case 'hs_deal_owner':
         return (
           <td key={colKey} className="py-2 px-3 text-xs text-gray-700 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
@@ -2283,7 +2438,7 @@ function LeadsPage() {
                 </button>
               </div>
 
-              {/* Group 2: AI / External */}
+              {/* Group 2: External / Dup */}
               <div className="flex items-center gap-1">
                 <button
                   onClick={handleBulkHsCheck}
@@ -2293,36 +2448,15 @@ function LeadsPage() {
                   {bulkHsChecking ? bulkHsProgress : 'HubSpot確認'}
                 </button>
                 <button
-                  onClick={handleBulkClassifyPriority}
-                  disabled={bulkClassifying}
-                  className="px-2 py-1 bg-violet-600 text-white text-xs rounded hover:bg-violet-700 disabled:opacity-50"
+                  onClick={handleBulkDupCheck}
+                  disabled={dupCheckLoading}
+                  className="px-2 py-1 bg-amber-500 text-white text-xs rounded hover:bg-amber-600 disabled:opacity-50"
                 >
-                  {bulkClassifying ? bulkClassifyProgress : 'AI優先度'}
+                  {dupCheckLoading ? '検索中...' : '重複チェック'}
                 </button>
               </div>
 
-              {/* Group 3: Email */}
-              <div className="flex items-center gap-1 bg-white rounded-md border border-blue-200 px-2 py-1">
-                <select
-                  value={bulkEmailTemplateType}
-                  onChange={(e) => setBulkEmailTemplateType(e.target.value as typeof bulkEmailTemplateType)}
-                  className="px-1 py-0.5 text-xs border-0 bg-transparent focus:ring-0"
-                >
-                  <option value="reapproach">再アプローチ</option>
-                  <option value="initial">初回</option>
-                  <option value="followup">フォローアップ</option>
-                  <option value="appointment">アポイント</option>
-                </select>
-                <button
-                  onClick={handleBulkEmailGenerate}
-                  disabled={bulkEmailGenerating}
-                  className="px-2 py-0.5 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 disabled:opacity-50"
-                >
-                  {bulkEmailGenerating ? bulkEmailGenerateProgress : 'メール生成'}
-                </button>
-              </div>
-
-              {/* Group 4: Danger */}
+              {/* Group 3: Danger */}
               <button
                 onClick={handleBulkDelete}
                 className="px-2 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700 ml-auto"
@@ -2415,6 +2549,8 @@ function LeadsPage() {
                   ? Array.from(vals).map(v => v ? v.replace('プラン', '') : '未設定')
                   : col === 'hs_deal_exists'
                   ? Array.from(vals).map(v => v === 'true' ? '商談あり' : '商談なし')
+                  : col === 'company_info_public'
+                  ? Array.from(vals).map(v => v === 'true' ? 'はい' : 'いいえ')
                   : Array.from(vals);
                 return (
                   <span key={col} className="inline-flex items-center gap-1 px-2 py-1 bg-blue-50 text-blue-700 rounded-md text-xs font-medium">
@@ -3389,7 +3525,7 @@ function LeadsPage() {
 
                       {csvSimilarDups.length > 0 && (
                         <div className="border border-amber-200 bg-amber-50 rounded-lg p-3">
-                          <p className="text-xs font-medium text-amber-800 mb-2">⚠ 類似重複の可能性あり（{csvSimilarDups.length}件）</p>
+                          <p className="text-xs font-medium text-amber-800 mb-2">⚠ 重複の可能性あり（{csvSimilarDups.length}件）</p>
                           <div className="space-y-1 max-h-32 overflow-auto">
                             {csvSimilarDups.map((dup) => (
                               <div key={dup.index} className="flex items-center gap-2 text-xs">
@@ -3408,10 +3544,16 @@ function LeadsPage() {
                                 />
                                 <span className="text-amber-900 font-medium">{dup.company}</span>
                                 <span className="text-amber-700">{dup.reason}</span>
+                                {dup.autoSkipped && (
+                                  <span className="ml-1 px-1.5 py-0.5 bg-red-100 text-red-700 rounded text-[10px] font-medium">自動スキップ</span>
+                                )}
+                                {dup.existingActivityCount === 0 && (
+                                  <span className="ml-1 px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[10px]">上書き可</span>
+                                )}
                               </div>
                             ))}
                           </div>
-                          <p className="text-[10px] text-amber-600 mt-2">チェックを外すとスキップします</p>
+                          <p className="text-[10px] text-amber-600 mt-2">チェックを外すとスキップ / 活動記録ありの既存リードは自動スキップ</p>
                         </div>
                       )}
                     </>
@@ -3436,6 +3578,69 @@ function LeadsPage() {
               >
                 {importing ? 'インポート中...' : `${csvData.length}件をインポート`}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Duplicate Check Modal */}
+      {showDupCheckModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowDupCheckModal(false)}>
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4" onClick={e => e.stopPropagation()}>
+            <div className="px-6 py-4 border-b border-gray-200">
+              <h2 className="text-base font-semibold text-gray-800">重複チェック結果</h2>
+            </div>
+            <div className="px-6 py-4 max-h-96 overflow-auto">
+              {dupCheckResults.length === 0 ? (
+                <p className="text-sm text-gray-500 text-center py-8">重複は見つかりませんでした</p>
+              ) : (
+                <div className="space-y-4">
+                  {dupCheckResults.map((group, gi) => (
+                    <div key={gi} className="border border-amber-200 bg-amber-50 rounded-lg p-3">
+                      <p className="text-xs font-medium text-amber-800 mb-2">
+                        {group.type === 'email' ? 'メール' : '電話番号'}一致: {group.key}
+                      </p>
+                      <div className="space-y-1.5">
+                        {group.leads.map(lead => (
+                          <div key={lead.id} className="flex items-center gap-2 text-xs">
+                            <input
+                              type="checkbox"
+                              checked={dupDeleteIds.has(lead.id)}
+                              onChange={e => {
+                                setDupDeleteIds(prev => {
+                                  const next = new Set(prev);
+                                  if (e.target.checked) next.add(lead.id);
+                                  else next.delete(lead.id);
+                                  return next;
+                                });
+                              }}
+                              className="rounded border-amber-400"
+                            />
+                            <span className="font-medium text-gray-800">{lead.company_name}</span>
+                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${lead.activityCount > 0 ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+                              活動{lead.activityCount}件
+                            </span>
+                            {dupDeleteIds.has(lead.id) && (
+                              <span className="px-1.5 py-0.5 bg-red-100 text-red-700 rounded text-[10px]">削除予定</span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                  <p className="text-[10px] text-gray-400">チェックを入れたリードを削除します。活動記録が少ない方が自動選択されています。</p>
+                </div>
+              )}
+            </div>
+            <div className="px-6 py-4 border-t border-gray-200 flex justify-end gap-3">
+              <button onClick={() => setShowDupCheckModal(false)} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">
+                閉じる
+              </button>
+              {dupDeleteIds.size > 0 && (
+                <button onClick={handleDupDelete} className="px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-lg hover:bg-red-700">
+                  {dupDeleteIds.size}件を削除
+                </button>
+              )}
             </div>
           </div>
         </div>

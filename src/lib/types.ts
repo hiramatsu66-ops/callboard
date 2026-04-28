@@ -32,6 +32,7 @@ export interface Lead {
   hs_deal_owner: string;
   hs_deal_created_at: string | null;
   hs_listing_plan: string;
+  company_info_public: boolean | null;
   created_at: string;
   updated_at: string;
   // Joined fields
