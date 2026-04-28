@@ -854,7 +854,7 @@ function LeadsPage() {
       });
       const data = await res.json();
       if (res.ok) {
-        const updated = { ...selectedLead, hs_deal_exists: data.deal_exists, hs_checked_at: data.checked_at, hs_deal_owner: data.deal_owner || '', hs_deal_created_at: data.deal_created_at || null, hs_listing_plan: data.listing_plan || '' };
+        const updated = { ...selectedLead, hs_deal_exists: data.deal_exists, hs_checked_at: data.checked_at, hs_deal_owner: data.deal_owner || '', hs_deal_created_at: data.deal_created_at || null, hs_listing_plan: data.listing_plan || '', ...(data.kintone_created_at !== null && data.kintone_created_at !== undefined && { kintone_created_at: data.kintone_created_at }) };
         setSelectedLead(updated);
         setLeads(prev => prev.map(l => l.id === updated.id ? { ...l, ...updated } : l));
       }

@@ -42,11 +42,13 @@ interface DealInfo {
   shouldExclude: boolean; // 受注済み or 有料プラン利用中
   excludeReason: string;
   listingPlan: string; // 掲載プラン
+  kintoneCreatedAt: string | null;
 }
 
 interface CompanyInfo {
   id: string;
   plan: string;
+  kintoneCreatedAt: string | null;
 }
 
 async function searchCompanies(
@@ -61,7 +63,7 @@ async function searchCompanies(
     },
     body: JSON.stringify({
       query,
-      properties: ['name', 'num_associated_deals', 'domain', 'plan'],
+      properties: ['name', 'num_associated_deals', 'domain', 'plan', 'created_date_kintone'],
       limit: 10,
     }),
   });
@@ -75,6 +77,7 @@ async function searchCompanies(
     .map((c: { id: string; properties: Record<string, string> }) => ({
       id: c.id,
       plan: c.properties.plan || '',
+      kintoneCreatedAt: c.properties.created_date_kintone || null,
     }));
 }
 
@@ -215,7 +218,8 @@ async function getDealsForContact(
 function pickBestDeal(
   deals: { dealname: string; hubspot_owner_id: string; createdate: string; dealstage: string }[],
   ownerMap: Map<string, string>,
-  companyPlan: string = ''
+  companyPlan: string = '',
+  kintoneCreatedAt: string | null = null
 ): DealInfo | null {
   if (deals.length === 0) return null;
   // Prefer qualified stage deal, otherwise use the most recent deal
@@ -238,6 +242,7 @@ function pickBestDeal(
     shouldExclude,
     excludeReason,
     listingPlan: companyPlan,
+    kintoneCreatedAt,
   };
 }
 
@@ -248,7 +253,7 @@ async function findDealForCompanies(
 ): Promise<DealInfo | null> {
   for (const company of companies) {
     const deals = await getDealsForCompany(company.id, token);
-    const result = pickBestDeal(deals, ownerMap, company.plan);
+    const result = pickBestDeal(deals, ownerMap, company.plan, company.kintoneCreatedAt);
     if (result) return result;
   }
   return null;
@@ -262,7 +267,7 @@ async function checkCompanyDeal(
   token: string,
   ownerMap: Map<string, string>
 ): Promise<DealInfo> {
-  const noDeal: DealInfo = { exists: false, ownerName: '', createdAt: null, dealStage: '', shouldExclude: false, excludeReason: '', listingPlan: '' };
+  const noDeal: DealInfo = { exists: false, ownerName: '', createdAt: null, dealStage: '', shouldExclude: false, excludeReason: '', listingPlan: '', kintoneCreatedAt: null };
 
   // 1. 会社名で検索
   let companies = await searchCompanies(companyName, token);
@@ -277,6 +282,7 @@ async function checkCompanyDeal(
 
   // 会社の有料プランチェック（取引がなくてもプランで除外判定する）
   const companyPlan = companies.length > 0 ? companies[0].plan : '';
+  const companyKintoneCreatedAt = companies.length > 0 ? companies[0].kintoneCreatedAt : null;
   if (!companies.length && companyPlan === '' ) {
     // no companies found, continue to contact search
   }
@@ -288,7 +294,7 @@ async function checkCompanyDeal(
 
     // 取引なしでもプランがある場合は除外対象
     if (ACTIVE_PLANS.has(companyPlan)) {
-      return { ...noDeal, shouldExclude: true, excludeReason: '有料プラン利用中', listingPlan: companyPlan };
+      return { ...noDeal, shouldExclude: true, excludeReason: '有料プラン利用中', listingPlan: companyPlan, kintoneCreatedAt: companyKintoneCreatedAt };
     }
   }
 
@@ -313,7 +319,7 @@ async function checkCompanyDeal(
     }
   }
 
-  return { ...noDeal, listingPlan: companyPlan };
+  return { ...noDeal, listingPlan: companyPlan, kintoneCreatedAt: companyKintoneCreatedAt };
 }
 
 export async function POST(request: NextRequest) {
@@ -340,6 +346,7 @@ export async function POST(request: NextRequest) {
       hs_deal_owner: dealInfo.ownerName,
       hs_deal_created_at: dealInfo.createdAt,
       hs_listing_plan: dealInfo.listingPlan,
+      ...(dealInfo.kintoneCreatedAt !== null && { kintone_created_at: dealInfo.kintoneCreatedAt }),
     };
 
     // 受注済みまたは有料プラン利用中の場合、自動的にステータスを対象外に
@@ -361,6 +368,7 @@ export async function POST(request: NextRequest) {
       should_exclude: dealInfo.shouldExclude,
       exclude_reason: dealInfo.excludeReason,
       listing_plan: dealInfo.listingPlan,
+      kintone_created_at: dealInfo.kintoneCreatedAt,
     });
   } catch (error) {
     console.error('HubSpot check error:', error);
