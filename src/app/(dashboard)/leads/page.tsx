@@ -1376,6 +1376,7 @@ function LeadsPage() {
       inquiry_date: ['問い合わせ日', 'inquiry_date', '問合せ日', '登録日', '日付'],
       inquiry_content: ['問い合わせ内容', 'inquiry_content', '問合せ内容', '内容'],
       memo: ['メモ', 'memo', '備考', 'ノート', 'note'],
+      company_info_public: ['企業情報公開', 'company_info_public', '情報公開'],
     };
     for (const [field, candidates] of Object.entries(patterns)) {
       for (const header of headers) {
@@ -1555,6 +1556,11 @@ function LeadsPage() {
       inquiry_content: (m.inquiry_content ? row[m.inquiry_content] : '')?.trim() || '',
       status: 'new' as const,
       memo: (m.memo ? row[m.memo] : '')?.trim() || '',
+      company_info_public: (() => {
+        const v = (m.company_info_public ? row[m.company_info_public] : '')?.trim();
+        if (!v) return null;
+        return ['はい', 'yes', 'true', '1', 'Y', 'y'].includes(v) ? true : false;
+      })(),
     }));
 
     const validLeads = leadsToInsert.filter(
@@ -3419,8 +3425,8 @@ function LeadsPage() {
                 <button
                   onClick={() => {
                     const bom = '\uFEFF';
-                    const header = '会社名,電話番号,担当者名,メールアドレス,HP,流入経路,問い合わせ日,問い合わせ内容,メモ';
-                    const sample = '株式会社サンプル,03-1234-5678,田中太郎,tanaka@example.com,https://example.com,Web問い合わせ,2026-03-23,料金について知りたい,初回コンタクト';
+                    const header = '会社名,電話番号,担当者名,メールアドレス,HP,流入経路,問い合わせ日,問い合わせ内容,メモ,企業情報公開';
+                    const sample = '株式会社サンプル,03-1234-5678,田中太郎,tanaka@example.com,https://example.com,Web問い合わせ,2026-03-23,料金について知りたい,初回コンタクト,はい';
                     const csv = bom + header + '\n' + sample + '\n';
                     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
                     const url = URL.createObjectURL(blob);
