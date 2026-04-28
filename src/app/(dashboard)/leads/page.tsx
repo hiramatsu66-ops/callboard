@@ -30,7 +30,7 @@ const supabase = createClient();
 const DEFAULT_COLUMN_ORDER = [
   'company_name', 'contact_name', 'phone', 'email', 'homepage',
   'lead_source', 'inquiry_date', 'inquiry_content', 'hs_listing_plan',
-  'hs_deal_exists', 'hs_deal_owner', 'hs_deal_created_at', 'company_info_public', 'priority', 'status',
+  'hs_deal_exists', 'hs_deal_owner', 'hs_deal_created_at', 'company_info_public', 'kintone_created_at', 'priority', 'status',
   'next_activity_date', 'assigned_to', 'call_count', 'memo',
 ];
 
@@ -48,6 +48,7 @@ const COLUMN_LABELS: Record<string, string> = {
   hs_deal_owner: '商談担当',
   hs_deal_created_at: '取引作成日',
   company_info_public: '企業情報公開',
+  kintone_created_at: 'kintone作成日時',
   priority: '優先度',
   status: 'ステータス',
   next_activity_date: '次回予定',
@@ -178,7 +179,7 @@ function LeadsPage() {
   const [columnOrder, setColumnOrder] = useState<string[]>(() => {
     if (typeof window !== 'undefined') {
       // カラム構成が変わったらlocalStorageをリセット
-      const COLUMN_VERSION = '4'; // カラム追加時にインクリメント
+      const COLUMN_VERSION = '5'; // カラム追加時にインクリメント
       const savedVersion = localStorage.getItem('callboard-column-version');
       if (savedVersion !== COLUMN_VERSION) {
         localStorage.removeItem('callboard-column-order');
@@ -1377,6 +1378,7 @@ function LeadsPage() {
       inquiry_content: ['問い合わせ内容', 'inquiry_content', '問合せ内容', '内容'],
       memo: ['メモ', 'memo', '備考', 'ノート', 'note'],
       company_info_public: ['企業情報公開', 'company_info_public', '情報公開'],
+      kintone_created_at: ['kintone作成日時', 'kintone_created_at', 'kintone登録日時', 'kintone作成日', '作成日時'],
     };
     for (const [field, candidates] of Object.entries(patterns)) {
       for (const header of headers) {
@@ -1561,6 +1563,7 @@ function LeadsPage() {
         if (!v) return null;
         return ['はい', 'yes', 'true', '1', 'Y', 'y'].includes(v) ? true : false;
       })(),
+      kintone_created_at: (m.kintone_created_at ? row[m.kintone_created_at] : '')?.trim() || null,
     }));
 
     const validLeads = leadsToInsert.filter(
@@ -2089,6 +2092,14 @@ function LeadsPage() {
                 {lead.hs_deal_created_at ? new Date(lead.hs_deal_created_at).toLocaleDateString('ja-JP') : '-'}
               </span>
             )}
+          </td>
+        );
+      case 'kintone_created_at':
+        return (
+          <td key={colKey} className="py-2 px-3 text-xs text-gray-700 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+            <span>
+              {lead.kintone_created_at ? new Date(lead.kintone_created_at).toLocaleDateString('ja-JP') : '-'}
+            </span>
           </td>
         );
       case 'priority':
@@ -3425,8 +3436,8 @@ function LeadsPage() {
                 <button
                   onClick={() => {
                     const bom = '\uFEFF';
-                    const header = '会社名,電話番号,担当者名,メールアドレス,HP,流入経路,問い合わせ日,問い合わせ内容,メモ,企業情報公開';
-                    const sample = '株式会社サンプル,03-1234-5678,田中太郎,tanaka@example.com,https://example.com,Web問い合わせ,2026-03-23,料金について知りたい,初回コンタクト,はい';
+                    const header = '会社名,電話番号,担当者名,メールアドレス,HP,流入経路,問い合わせ日,問い合わせ内容,メモ,企業情報公開,kintone作成日時';
+                    const sample = '株式会社サンプル,03-1234-5678,田中太郎,tanaka@example.com,https://example.com,Web問い合わせ,2026-03-23,料金について知りたい,初回コンタクト,はい,2026-03-01';
                     const csv = bom + header + '\n' + sample + '\n';
                     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
                     const url = URL.createObjectURL(blob);
